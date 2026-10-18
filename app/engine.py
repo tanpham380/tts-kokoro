@@ -106,22 +106,133 @@ VI_ABBREVIATIONS: dict[str, str] = {
 }
 
 
+UNITS: list[str] = [
+    "không", "một", "hai", "ba", "bốn", "năm", "sáu", "bảy", "tám", "chín"
+]
+
+
+def int_to_vietnamese_words(n: int) -> str:
+    """Convert an integer 0..999,999,999,999 to natural Vietnamese words."""
+    if n < 0:
+        return "âm " + int_to_vietnamese_words(-n)
+    if n < 10:
+        return UNITS[n]
+    if n < 20:
+        if n == 10:
+            return "mười"
+        if n == 15:
+            return "mười lăm"
+        return "mười " + UNITS[n % 10]
+    if n < 100:
+        ten, unit = n // 10, n % 10
+        ten_str = UNITS[ten] + " mươi"
+        if unit == 0:
+            return ten_str
+        if unit == 1:
+            return ten_str + " mốt"
+        if unit == 4:
+            return ten_str + " tư"
+        if unit == 5:
+            return ten_str + " lăm"
+        return ten_str + " " + UNITS[unit]
+    if n < 1000:
+        h, rem = n // 100, n % 100
+        h_str = UNITS[h] + " trăm"
+        if rem == 0:
+            return h_str
+        if rem < 10:
+            return h_str + " lẻ " + UNITS[rem]
+        return h_str + " " + int_to_vietnamese_words(rem)
+    if n < 1_000_000:
+        k, rem = n // 1000, n % 1000
+        k_str = int_to_vietnamese_words(k) + " nghìn"
+        if rem == 0:
+            return k_str
+        if rem < 100:
+            if rem < 10:
+                return k_str + " không trăm lẻ " + UNITS[rem]
+            return k_str + " không trăm " + int_to_vietnamese_words(rem)
+        return k_str + " " + int_to_vietnamese_words(rem)
+    if n < 1_000_000_000:
+        m, rem = n // 1_000_000, n % 1_000_000
+        m_str = int_to_vietnamese_words(m) + " triệu"
+        if rem == 0:
+            return m_str
+        return m_str + " " + int_to_vietnamese_words(rem)
+    b, rem = n // 1_000_000_000, n % 1_000_000_000
+    b_str = int_to_vietnamese_words(b) + " tỷ"
+    if rem == 0:
+        return b_str
+    return b_str + " " + int_to_vietnamese_words(rem)
+
+
+def digits_to_vietnamese_words(s: str) -> str:
+    """Convert a sequence of digits to individual words (e.g. '01' -> 'không một')."""
+    return " ".join(UNITS[int(c)] for c in s if c.isdigit())
+
+
+def convert_numbers_to_vietnamese_words(text: str) -> str:
+    """Normalize numeric expressions (dates, decimals, leading zero numbers, integers) into words."""
+    if not text:
+        return ""
+
+    # 1. Date formats: dd/mm/yyyy or dd-mm-yyyy (e.g. 01/05/2001)
+    def _date_sub(m: re.Match) -> str:
+        try:
+            d = int(m.group(1))
+            mo = int(m.group(2))
+            y = int(m.group(3))
+            d_word = ("mùng " + UNITS[d]) if (1 <= d <= 9) else int_to_vietnamese_words(d)
+            return f"ngày {d_word} tháng {int_to_vietnamese_words(mo)} năm {int_to_vietnamese_words(y)}"
+        except Exception:
+            return m.group(0)
+
+    text = re.sub(r"\b([0-3]?\d)[/-]([01]?\d)[/-](\d{4})\b", _date_sub, text)
+
+    # 2. Decimals: 3.14 or 3,14
+    def _dec_sub(m: re.Match) -> str:
+        try:
+            w1 = int_to_vietnamese_words(int(m.group(1)))
+            w2 = digits_to_vietnamese_words(m.group(2))
+            return f"{w1} phẩy {w2}"
+        except Exception:
+            return m.group(0)
+
+    text = re.sub(r"\b(\d+)[.,](\d+)\b", _dec_sub, text)
+
+    # 3. Individual numbers / padded digits (e.g. '01', '05', '2001')
+    def _num_sub(m: re.Match) -> str:
+        s = m.group(0)
+        if len(s) > 1 and s.startswith("0"):
+            return digits_to_vietnamese_words(s)
+        try:
+            return int_to_vietnamese_words(int(s))
+        except Exception:
+            return digits_to_vietnamese_words(s)
+
+    text = re.sub(r"\b\d+\b", _num_sub, text)
+    return text
+
+
 def normalize_vietnamese_text(text: str) -> str:
-    """Preprocess Vietnamese text: normalize abbreviations and fix standalone letters (Issue #4)."""
+    """Preprocess Vietnamese text: normalize abbreviations, numbers and fix standalone letters (Issue #4)."""
     if not text:
         return ""
     # 1. Unicode NFC
     text = unicodedata.normalize("NFC", text)
 
-    # 2. Abbreviations
+    # 2. Abbreviations & Units (do this before number expansion so 15km -> 15 ki lô mét)
     for pattern, rep in VI_ABBREVIATIONS.items():
         text = re.sub(pattern, rep, text, flags=re.IGNORECASE)
 
-    # 3. Standalone letter fixes (Issue #4: Y -> i, avoiding 'quai' pronunciation)
+    # 3. Numbers & Dates expansion (e.g. '01 05 2001' -> 'không một không năm hai nghìn không trăm lẻ một')
+    text = convert_numbers_to_vietnamese_words(text)
+
+    # 4. Standalone letter fixes (Issue #4: Y -> i, avoiding 'quai' pronunciation)
     for pattern, rep in STANDALONE_LETTER_FIXES.items():
         text = re.sub(pattern, rep, text)
 
-    # 4. Clean extra spaces
+    # 5. Clean extra spaces
     text = re.sub(r"[ \t]+", " ", text).strip()
     return text
 

@@ -351,3 +351,18 @@ def test_gpustack_local_directory_mount_resolution(tmp_path, monkeypatch):
     assert captured_init["voicepack_path"] == str(voices_dir / "diem_trinh.pt")
     assert runtime.id == "diem_trinh"
 
+
+def test_normalize_numbers_and_dates():
+    from app.engine import normalize_vietnamese_text
+
+    # User test case: "01 05 2001"
+    assert normalize_vietnamese_text("01 05 2001") == "không một không năm hai nghìn không trăm lẻ một"
+    # Date with slashes
+    assert normalize_vietnamese_text("01/05/2001") == "ngày mùng một tháng năm năm hai nghìn không trăm lẻ một"
+    # Decimals
+    assert normalize_vietnamese_text("3.14") == "ba phẩy một bốn"
+    # Regular numbers
+    assert normalize_vietnamese_text("năm 2024") == "năm hai nghìn không trăm hai mươi tư"
+    assert normalize_vietnamese_text("100k") == "một trăm nghìn"
+
+
