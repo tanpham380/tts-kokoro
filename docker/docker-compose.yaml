@@ -37,12 +37,16 @@ services:
       context: ..
       dockerfile: Dockerfile
     image: kokoro-vi-server:cpu
-    profiles: ["cpu"]
     container_name: kokoro-vi-server-cpu
     ports:
       - "8881:8880"
     environment:
       DEVICE: cpu
+      MODEL_PATH: contextboxai/Kokoro-Vietnamese
+      SERVED_MODEL_NAME: Kokoro-Vietnamese
+      DEFAULT_VOICE: diem_trinh
+      PRELOAD: "true"
+      LOG_LEVEL: ${LOG_LEVEL:-info}
     deploy:
       resources:
         limits:
@@ -60,6 +64,11 @@ services:
       - "8882:8880"
     environment:
       DEVICE: cuda
+      MODEL_PATH: contextboxai/Kokoro-Vietnamese
+      SERVED_MODEL_NAME: Kokoro-Vietnamese
+      DEFAULT_VOICE: diem_trinh
+      PRELOAD: "true"
+      LOG_LEVEL: ${LOG_LEVEL:-info}
     deploy:
       resources:
         reservations:
