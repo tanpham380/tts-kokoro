@@ -1,0 +1,35 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Secrets and local overrides. `.env.example` is the tracked template.
+.env
+.env.local
+
+# Model weights, voicepacks and local caches.
+cache/
+models/
+voicepacks/
+outputs/
+*.safetensors
+*.bin
+*.pt
+*.pth
+*.onnx
+
+# Generated audio.
+*.wav
+*.mp3
+*.flac
+*.opus
+*.m4a
+
+.DS_Store
+*.log

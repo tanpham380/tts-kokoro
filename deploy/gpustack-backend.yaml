@@ -1,0 +1,55 @@
+# GPUStack custom inference backend for Kokoro-Vietnamese TTS Server.
+#
+# Import it on the GPUStack Inference Backends page ("Add Backend" -> paste YAML)
+# after pushing or building the container image. The backend_name must end with "-custom".
+#
+# Two versions are declared so the same backend serves both worker profiles:
+#   version 1.0.0      framework cuda  -> scheduled onto GPU workers (NVIDIA CUDA)
+#   version 1.0.0-cpu  framework cpu   -> scheduled onto CPU-only workers
+#
+# How GPUStack orchestrates this:
+#   backend_name:      Kokoro-TTS-Vietnamese-custom (ends with -custom)
+#   health_check_path: /health (or /ready)
+#   run_command:       appended to ENTRYPOINT ["kokoro-vi-server"], with {{model_path}},
+#                      {{model_name}}, {{port}} and {{worker_ip}} substituted at deploy time.
+#   image_name:        fully qualified docker image name or local tag.
+
+backend_name: Kokoro-TTS-Vietnamese-custom
+default_version: "1.0.0"
+health_check_path: /health
+description: >-
+  Kokoro-Vietnamese OpenAI-compatible Text-To-Speech (TTS) server supporting 14
+  Vietnamese voicepacks, audio streaming (SSE and chunked raw bytes), speed adjustment,
+  and multi-format audio encoding (MP3, WAV, Opus, AAC, FLAC, PCM).
+default_env:
+  PRELOAD: "true"
+  WARMUP: "true"
+  HF_HOME: /cache/huggingface
+  LOG_LEVEL: info
+  DEFAULT_VOICE: diem_trinh
+  # Optional:
+  # API_KEY: "sk-..."     # Require Bearer token on requests
+  # MAX_CONCURRENCY: "1"  # Concurrent forward passes
+  # MAX_QUEUE: "256"      # Max waiting queue before 503
+version_configs:
+  "1.0.0":
+    image_name: kokoro-vi-server:gpu
+    custom_framework: cuda
+    run_command: >-
+      --model-path {{model_path}}
+      --served-model-name {{model_name}}
+      --host {{worker_ip}}
+      --port {{port}}
+  "1.0.0-cpu":
+    image_name: kokoro-vi-server:cpu
+    custom_framework: cpu
+    env:
+      DEVICE: cpu
+      MAX_CONCURRENCY: "1"
+      MAX_QUEUE: "256"
+      QUEUE_TIMEOUT: "60"
+    run_command: >-
+      --model-path {{model_path}}
+      --served-model-name {{model_name}}
+      --host {{worker_ip}}
+      --port {{port}}

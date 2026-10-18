@@ -1,0 +1,72 @@
+# Two profiles, matching quan-asr:
+#
+#   docker compose --profile cpu up       # CPU-only host
+#   docker compose --profile gpu up       # NVIDIA GPU host
+#
+# Both services build the Dockerfile (GPU one is built with --build-arg to swap
+# the torch wheel). The GPU service uses nvidia/cuda image and pins the
+# `device: gpu` label; the CPU service uses the slim python image and pins
+# device=cpu.
+
+x-common: &common
+  build:
+    context: ..
+    dockerfile: Dockerfile
+  image: kokoro-vi-server:1.0.0
+  volumes:
+    # Keep downloaded voicepacks and the HF model across container restarts.
+    - hf-cache:/cache/huggingface
+  environment:
+    MODEL_PATH: contextboxai/Kokoro-Vietnamese
+    SERVED_MODEL_NAME: Kokoro-Vietnamese
+    DEFAULT_VOICE: diem_trinh
+    PRELOAD: "true"
+    LOG_LEVEL: ${LOG_LEVEL:-info}
+  restart: unless-stopped
+  healthcheck:
+    test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8880/ready"]
+    interval: 30s
+    timeout: 10s
+    start_period: 120s
+    retries: 5
+
+services:
+  kokoro-vi-server-cpu:
+    <<: *common
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: kokoro-vi-server:cpu
+    profiles: ["cpu"]
+    container_name: kokoro-vi-server-cpu
+    ports:
+      - "8881:8880"
+    environment:
+      DEVICE: cpu
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+
+  kokoro-vi-server-gpu:
+    <<: *common
+    build:
+      context: ..
+      dockerfile: Dockerfile.gpu
+    image: kokoro-vi-server:gpu
+    profiles: ["gpu"]
+    container_name: kokoro-vi-server-gpu
+    ports:
+      - "8882:8880"
+    environment:
+      DEVICE: cuda
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+volumes:
+  hf-cache: {}

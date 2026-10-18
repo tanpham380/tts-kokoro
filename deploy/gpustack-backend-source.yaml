@@ -1,0 +1,45 @@
+# InferenceBackendSource document for GPUStack managed backend sources.
+#
+# Use this when GPUStack is configured with a managed backend source
+# (Settings -> Inference Backend Sources -> File/URL source).
+apiVersion: gpustack.ai/v1
+kind: InferenceBackendSource
+metadata:
+  name: kokoro-tts-vietnamese-custom
+spec:
+  content: |
+    backend_name: Kokoro-TTS-Vietnamese-custom
+    default_version: "1.0.0"
+    health_check_path: /health
+    description: >-
+      Kokoro-Vietnamese OpenAI-compatible Text-To-Speech (TTS) server supporting 14
+      Vietnamese voicepacks, audio streaming (SSE and chunked raw bytes), speed adjustment,
+      and multi-format audio encoding (MP3, WAV, Opus, AAC, FLAC, PCM).
+    default_env:
+      PRELOAD: "true"
+      WARMUP: "true"
+      HF_HOME: /cache/huggingface
+      LOG_LEVEL: info
+      DEFAULT_VOICE: diem_trinh
+    version_configs:
+      "1.0.0":
+        image_name: kokoro-vi-server:gpu
+        built_in_frameworks: ["cuda"]
+        run_command: >-
+          --model-path {{model_path}}
+          --served-model-name {{model_name}}
+          --host {{worker_ip}}
+          --port {{port}}
+      "1.0.0-cpu":
+        image_name: kokoro-vi-server:cpu
+        built_in_frameworks: ["cpu"]
+        env:
+          DEVICE: cpu
+          MAX_CONCURRENCY: "1"
+          MAX_QUEUE: "256"
+          QUEUE_TIMEOUT: "60"
+        run_command: >-
+          --model-path {{model_path}}
+          --served-model-name {{model_name}}
+          --host {{worker_ip}}
+          --port {{port}}

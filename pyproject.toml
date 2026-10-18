@@ -1,0 +1,56 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kokoro-vi-server"
+version = "1.0.0"
+description = "OpenAI-compatible, streaming-capable Vietnamese TTS API server powered by Kokoro-Vietnamese"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "numpy>=1.24",
+    "soundfile>=0.12",
+    "huggingface_hub>=0.23",
+    "vig2p",
+    # Vietnamese Kokoro runtime: model definition, voicepacks and the vig2p G2P.
+    # torch is installed separately by the Dockerfiles so the CPU/CUDA wheel can
+    # be chosen per platform; kokoro-vietnamese pulls it in when it is missing.
+    "kokoro-vietnamese @ git+https://github.com/iamdinhthuan/Kokoro-Vietnamese",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8", "httpx>=0.27", "pytest-asyncio>=0.23"]
+
+[project.scripts]
+kokoro-vi-server = "app.cli:main"
+tts-kokoro = "app.cli:main"
+
+[project.urls]
+Model = "https://huggingface.co/contextboxai/Kokoro-Vietnamese"
+Upstream = "https://github.com/iamdinhthuan/Kokoro-Vietnamese"
+
+[tool.setuptools]
+packages = ["app"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = ["ignore::DeprecationWarning"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM", "RUF"]
+ignore = [
+    "E501", # long lines are handled by the formatter, not the linter
+]
+
+[tool.ruff.lint.per-file-ignores]
+# FastAPI's dependency injection is built around calls in argument defaults.
+"app/server.py" = ["B008"]
+"tests/*" = ["B008"]
