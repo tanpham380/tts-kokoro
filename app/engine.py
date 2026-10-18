@@ -193,7 +193,14 @@ def convert_numbers_to_vietnamese_words(text: str) -> str:
     def _dec_sub(m: re.Match) -> str:
         try:
             w1 = int_to_vietnamese_words(int(m.group(1)))
-            w2 = digits_to_vietnamese_words(m.group(2))
+            dec_str = m.group(2)
+            # In natural Vietnamese, 1-2 decimal places without leading zeros are read as numbers:
+            # 3.14 -> "ba phẩy mười bốn", 6.5 -> "sáu phẩy năm", 0.25 -> "không phẩy hai mươi lăm"
+            # If starting with 0 (e.g. 0.05) or >= 3 digits (e.g. 3.14159), read digit-by-digit.
+            if len(dec_str) <= 2 and not dec_str.startswith("0"):
+                w2 = int_to_vietnamese_words(int(dec_str))
+            else:
+                w2 = digits_to_vietnamese_words(dec_str)
             return f"{w1} phẩy {w2}"
         except Exception:
             return m.group(0)

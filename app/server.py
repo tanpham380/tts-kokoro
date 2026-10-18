@@ -327,12 +327,26 @@ async def create_speech(
     _check_model(req.model)
     req.check_limits(settings)
 
+    if not engine.is_loaded:
+        if engine._load_error:
+            raise APIError(
+                f"the model failed to load: {engine._load_error}",
+                status_code=503,
+                code="model_load_failed",
+            )
+        raise APIError(
+            "the model is still loading, please retry in a moment",
+            status_code=503,
+            code="model_loading",
+        )
+
     try:
-        resolve(req.voice, settings.default_voice)  # validate early
+        resolved_voice = resolve(req.voice, settings.default_voice)  # validate early
     except Exception as exc:
         raise APIError(
             str(exc), status_code=400, code="invalid_voice", param="voice"
         ) from exc
+    req.voice = resolved_voice
 
     fmt = req.response_format
     stream_format = req.stream_format
@@ -468,29 +482,32 @@ async def _stream_sse(
     text has been synthesized.
     """
 
-    async for chunk, flush_flag in _threaded_stream(
-        text,
-        voice=voice,
-        speed=speed,
-        fmt=fmt,
-        volume_multiplier=volume_multiplier,
-        language=language,
-        task_type=task_type,
-        instructions=instructions,
-        reference_audio=reference_audio,
-        use_speaker_embedding_only=use_speaker_embedding_only,
-    ):
-        if prefix:
-            delta = prefix + chunk
-            prefix = b""
-        else:
-            delta = chunk
-        yield _audio_delta(delta)
-        if flush_flag:
-            break
+    try:
+        async for chunk, flush_flag in _threaded_stream(
+            text,
+            voice=voice,
+            speed=speed,
+            fmt=fmt,
+            volume_multiplier=volume_multiplier,
+            language=language,
+            task_type=task_type,
+            instructions=instructions,
+            reference_audio=reference_audio,
+            use_speaker_embedding_only=use_speaker_embedding_only,
+        ):
+            if prefix:
+                delta = prefix + chunk
+                prefix = b""
+            else:
+                delta = chunk
+            yield _audio_delta(delta)
+            if flush_flag:
+                break
 
-    yield _sse({"type": "speech.audio.done"})
-    yield "data: [DONE]\n\n"
+        yield _sse({"type": "speech.audio.done"})
+        yield "data: [DONE]\n\n"
+    except (asyncio.CancelledError, GeneratorExit):
+        return
 
 
 async def _stream_audio(
@@ -509,23 +526,26 @@ async def _stream_audio(
 ) -> AsyncIterator[bytes]:
     """Generator for ``stream_format=audio`` (raw-byte streaming)."""
     first = True
-    async for chunk, flush_flag in _threaded_stream(
-        text,
-        voice=voice,
-        speed=speed,
-        fmt=fmt,
-        volume_multiplier=volume_multiplier,
-        language=language,
-        task_type=task_type,
-        instructions=instructions,
-        reference_audio=reference_audio,
-        use_speaker_embedding_only=use_speaker_embedding_only,
-    ):
-        data = (prefix + chunk) if first and prefix else chunk
-        first = False
-        yield data
-        if flush_flag:
-            break
+    try:
+        async for chunk, flush_flag in _threaded_stream(
+            text,
+            voice=voice,
+            speed=speed,
+            fmt=fmt,
+            volume_multiplier=volume_multiplier,
+            language=language,
+            task_type=task_type,
+            instructions=instructions,
+            reference_audio=reference_audio,
+            use_speaker_embedding_only=use_speaker_embedding_only,
+        ):
+            data = (prefix + chunk) if first and prefix else chunk
+            first = False
+            yield data
+            if flush_flag:
+                break
+    except (asyncio.CancelledError, GeneratorExit):
+        return
 
 
 async def _threaded_stream(
@@ -562,28 +582,32 @@ async def _threaded_stream(
                     use_speaker_embedding_only=use_speaker_embedding_only,
                 )
             )
-        except APIError:
-            # Voice / quota errors surface on the first yielded frame in the
-            # batched path, before the lock is acquired. Convert to 503.
-            raise
         except Exception as exc:
-            raise APIError(f"synthesis failed: {exc}", status_code=500) from exc
+            logger.warning("Streaming producer synthesis error: %s", exc)
+            return
 
         for i, np_chunk in enumerate(chunks):
             try:
                 data = encode_stream_chunk(np_chunk, fmt, engine.sample_rate)
             except Exception as exc:
-                raise APIError(f"encoding failed: {exc}", status_code=500) from exc
+                logger.warning("Streaming producer chunk encoding error: %s", exc)
+                return
             yield (data, i == len(chunks) - 1)
 
     loop = asyncio.get_running_loop()
     producer = _produce()
-    while True:
-        try:
-            item = await loop.run_in_executor(None, next, producer)
-        except StopIteration:
-            return
-        yield item  # type: ignore[misc]
+    try:
+        while True:
+            try:
+                item = await loop.run_in_executor(None, next, producer)
+            except StopIteration:
+                return
+            except Exception as exc:
+                logger.debug("Streaming consumer stopped: %s", exc)
+                return
+            yield item  # type: ignore[misc]
+    except (asyncio.CancelledError, GeneratorExit):
+        return
 
 
 # --------------------------------------------------------------------------- #
