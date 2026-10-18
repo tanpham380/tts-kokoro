@@ -384,7 +384,7 @@ async def create_speech(
                 req.input,
                 voice=req.voice,
                 speed=req.speed,
-                fmt=req.response_format,
+                fmt=fmt,
                 volume_multiplier=req.volume_multiplier,
                 prefix=suffix,
                 language=req.language,
@@ -483,7 +483,7 @@ async def _stream_sse(
     """
 
     try:
-        async for chunk, flush_flag in _threaded_stream(
+        async for chunk, _ in _threaded_stream(
             text,
             voice=voice,
             speed=speed,
@@ -501,8 +501,6 @@ async def _stream_sse(
             else:
                 delta = chunk
             yield _audio_delta(delta)
-            if flush_flag:
-                break
 
         yield _sse({"type": "speech.audio.done"})
         yield "data: [DONE]\n\n"
@@ -527,7 +525,7 @@ async def _stream_audio(
     """Generator for ``stream_format=audio`` (raw-byte streaming)."""
     first = True
     try:
-        async for chunk, flush_flag in _threaded_stream(
+        async for chunk, _ in _threaded_stream(
             text,
             voice=voice,
             speed=speed,
@@ -542,8 +540,6 @@ async def _stream_audio(
             data = (prefix + chunk) if first and prefix else chunk
             first = False
             yield data
-            if flush_flag:
-                break
     except (asyncio.CancelledError, GeneratorExit):
         return
 
@@ -569,41 +565,45 @@ async def _threaded_stream(
 
     def _produce() -> Generator[tuple[bytes, bool], None, None]:
         try:
-            chunks = list(
-                engine.stream(
-                    text,
-                    voice=voice,
-                    speed=speed,
-                    volume_multiplier=volume_multiplier,
-                    language=language,
-                    task_type=task_type,
-                    instructions=instructions,
-                    reference_audio=reference_audio,
-                    use_speaker_embedding_only=use_speaker_embedding_only,
-                )
-            )
+            for np_chunk in engine.stream(
+                text,
+                voice=voice,
+                speed=speed,
+                volume_multiplier=volume_multiplier,
+                language=language,
+                task_type=task_type,
+                instructions=instructions,
+                reference_audio=reference_audio,
+                use_speaker_embedding_only=use_speaker_embedding_only,
+            ):
+                try:
+                    data = encode_stream_chunk(np_chunk, fmt, engine.sample_rate)
+                except Exception as exc:
+                    logger.warning("Streaming producer chunk encoding error: %s", exc)
+                    return
+                yield (data, False)
         except Exception as exc:
             logger.warning("Streaming producer synthesis error: %s", exc)
             return
 
-        for i, np_chunk in enumerate(chunks):
-            try:
-                data = encode_stream_chunk(np_chunk, fmt, engine.sample_rate)
-            except Exception as exc:
-                logger.warning("Streaming producer chunk encoding error: %s", exc)
-                return
-            yield (data, i == len(chunks) - 1)
+    _SENTINEL = object()
+
+    def _safe_next(p: Any) -> Any:
+        try:
+            return next(p)
+        except StopIteration:
+            return _SENTINEL
 
     loop = asyncio.get_running_loop()
     producer = _produce()
     try:
         while True:
             try:
-                item = await loop.run_in_executor(None, next, producer)
-            except StopIteration:
-                return
+                item = await loop.run_in_executor(None, _safe_next, producer)
             except Exception as exc:
-                logger.debug("Streaming consumer stopped: %s", exc)
+                logger.debug("Streaming consumer error: %s", exc)
+                return
+            if item is _SENTINEL:
                 return
             yield item  # type: ignore[misc]
     except (asyncio.CancelledError, GeneratorExit):

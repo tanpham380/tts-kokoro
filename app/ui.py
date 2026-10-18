@@ -940,6 +940,15 @@ INDEX_HTML = r"""<!doctype html>
         </div>
       </div>
 
+      <!-- Live Streaming Indicator -->
+      <div id="streamingIndicator" style="display:none; align-items:center; justify-content:space-between; background:var(--md-surface-variant); padding:10px 14px; border-radius:10px; border:1px solid var(--md-border); margin-bottom:12px;">
+        <div style="display:flex; align-items:center; gap:8px;">
+          <span class="pulse-dot" style="background-color:var(--google-green);"></span>
+          <span id="streamingStatusText" style="font-size:13px; font-weight:600; color:var(--google-green);">Đang phát luồng âm thanh trực tiếp...</span>
+        </div>
+        <div style="font-size:12px; color:var(--md-text-secondary); font-family:'JetBrains Mono', monospace;" id="streamingChunkStats">0 câu · 0ms TTFA</div>
+      </div>
+
       <div class="player-wrapper">
         <audio id="audioPlayer" controls></audio>
         <a id="downloadBtn" class="btn btn-outlined" download="speech.mp3" style="text-decoration:none;">
@@ -1216,6 +1225,8 @@ function chooseVoiceAndTest(voiceId) {
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
+let currentAudioCtx = null;
+
 // Synthesis
 async function synthesize() {
   const text = textInput.value.trim();
@@ -1223,6 +1234,13 @@ async function synthesize() {
     alert('Vui lòng nhập văn bản cần tổng hợp.');
     return;
   }
+
+  // Stop any previous playing audio context
+  if (currentAudioCtx) {
+    try { currentAudioCtx.close(); } catch(e) {}
+    currentAudioCtx = null;
+  }
+  audioPlayer.pause();
 
   generateBtn.disabled = true;
   btnIcon.textContent = 'hourglass_empty';
@@ -1260,6 +1278,10 @@ async function synthesize() {
   if (refText) payload.transcript_of_reference_audio = refText;
   if (speakerEmbedOnly) payload.use_speaker_embedding_only = true;
 
+  const streamingIndicator = document.getElementById('streamingIndicator');
+  const streamingStatusText = document.getElementById('streamingStatusText');
+  const streamingChunkStats = document.getElementById('streamingChunkStats');
+
   const t0 = performance.now();
   try {
     const res = await fetch('/v1/audio/speech', {
@@ -1273,24 +1295,156 @@ async function synthesize() {
       throw new Error(err.error?.message || 'Lỗi khi tổng hợp giọng nói');
     }
 
-    const elapsed = Math.round(performance.now() - t0);
-    const blob = await res.blob();
-    const url = URL.createObjectURL(blob);
-
     resultCard.style.display = 'flex';
-    audioPlayer.src = url;
-    downloadBtn.href = url;
-    downloadBtn.download = `kokoro_${voiceSelect.value}_${Date.now()}.${format}`;
 
-    audioPlayer.onloadedmetadata = () => {
-      const dur = audioPlayer.duration;
-      const rtf = (dur > 0) ? (elapsed / 1000 / dur).toFixed(2) : '0.00';
-      metricFormat.textContent = `${format.toUpperCase()} · 24kHz Mono`;
-      metricLatency.textContent = `Thời gian xử lý: ${elapsed}ms`;
-      metricRTF.textContent = `RTF: ${rtf}x (${dur.toFixed(1)}s audio)`;
-    };
+    if (streamMode === 'sse') {
+      // ---------------------------------------------------- Real-time SSE Stream
+      streamingIndicator.style.display = 'flex';
+      streamingStatusText.textContent = 'Đang nhận luồng sự kiện SSE...';
+      streamingChunkStats.textContent = '0 câu · 0ms TTFA';
 
-    audioPlayer.play().catch(() => {});
+      const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+      const audioCtx = new AudioContextClass();
+      currentAudioCtx = audioCtx;
+      if (audioCtx.state === 'suspended') {
+        await audioCtx.resume();
+      }
+
+      let nextStartTime = audioCtx.currentTime;
+      let chunkCount = 0;
+      let ttfa = 0;
+      let totalAudioDuration = 0;
+      const audioBlobs = [];
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder('utf-8');
+      let buffer = '';
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop(); // keep last incomplete line
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed.startsWith('data:')) continue;
+          const dataStr = trimmed.slice(5).trim();
+          if (dataStr === '[DONE]') continue;
+
+          try {
+            const evt = JSON.parse(dataStr);
+            if (evt.type === 'speech.audio.delta' && evt.audio) {
+              chunkCount++;
+              if (chunkCount === 1) {
+                ttfa = Math.round(performance.now() - t0);
+              }
+              streamingStatusText.textContent = `🟢 Đang phát câu ${chunkCount} trực tiếp...`;
+              streamingChunkStats.textContent = `${chunkCount} câu · TTFA: ${ttfa}ms`;
+
+              // Decode base64 to ArrayBuffer
+              const binaryStr = atob(evt.audio);
+              const bytes = new Uint8Array(binaryStr.length);
+              for (let i = 0; i < binaryStr.length; i++) {
+                bytes[i] = binaryStr.charCodeAt(i);
+              }
+              audioBlobs.push(bytes.buffer);
+
+              // Schedule audio chunk in Web Audio API
+              const audioBuffer = await audioCtx.decodeAudioData(bytes.buffer.slice(0));
+              totalAudioDuration += audioBuffer.duration;
+
+              const source = audioCtx.createBufferSource();
+              source.buffer = audioBuffer;
+              source.connect(audioCtx.destination);
+              const startAt = Math.max(audioCtx.currentTime, nextStartTime);
+              source.start(startAt);
+              nextStartTime = startAt + audioBuffer.duration;
+            } else if (evt.type === 'speech.audio.done') {
+              streamingStatusText.textContent = `✅ Hoàn thành luồng (${chunkCount} câu)`;
+            }
+          } catch (e) {
+            console.error('SSE parse error:', e);
+          }
+        }
+      }
+
+      const totalElapsed = Math.round(performance.now() - t0);
+      metricFormat.textContent = `SSE STREAM · 24kHz`;
+      metricLatency.textContent = `TTFA: ${ttfa}ms · Tổng: ${totalElapsed}ms`;
+      const rtf = totalAudioDuration > 0 ? (totalElapsed / 1000 / totalAudioDuration).toFixed(2) : '0.00';
+      metricRTF.textContent = `RTF: ${rtf}x (${totalAudioDuration.toFixed(1)}s audio)`;
+
+      if (audioBlobs.length > 0) {
+        const fullBlob = new Blob(audioBlobs, { type: 'audio/wav' });
+        const url = URL.createObjectURL(fullBlob);
+        audioPlayer.src = url;
+        downloadBtn.href = url;
+        downloadBtn.download = `kokoro_${voiceSelect.value}_${Date.now()}.wav`;
+      }
+    } else if (streamMode === 'audio') {
+      // ---------------------------------------------------- Chunked Raw Audio
+      streamingIndicator.style.display = 'flex';
+      streamingStatusText.textContent = 'Đang nhận luồng byte âm thanh chunked...';
+      streamingChunkStats.textContent = '0 chunks';
+
+      const reader = res.body.getReader();
+      const chunks = [];
+      let receivedBytes = 0;
+      let chunkCount = 0;
+      let ttfa = 0;
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        chunkCount++;
+        if (chunkCount === 1) {
+          ttfa = Math.round(performance.now() - t0);
+        }
+        chunks.push(value);
+        receivedBytes += value.length;
+        streamingStatusText.textContent = `Đang nhận luồng: ${(receivedBytes / 1024).toFixed(1)} KB...`;
+        streamingChunkStats.textContent = `${chunkCount} chunks · TTFA: ${ttfa}ms`;
+      }
+
+      const totalElapsed = Math.round(performance.now() - t0);
+      streamingStatusText.textContent = `✅ Đã nhận đủ luồng ${(receivedBytes / 1024).toFixed(1)} KB`;
+
+      const fullBlob = new Blob(chunks, { type: 'audio/wav' });
+      const url = URL.createObjectURL(fullBlob);
+      audioPlayer.src = url;
+      downloadBtn.href = url;
+      downloadBtn.download = `kokoro_${voiceSelect.value}_${Date.now()}.wav`;
+
+      audioPlayer.onloadedmetadata = () => {
+        const dur = audioPlayer.duration;
+        const rtf = dur > 0 ? (totalElapsed / 1000 / dur).toFixed(2) : '0.00';
+        metricFormat.textContent = `WAV STREAM · 24kHz`;
+        metricLatency.textContent = `TTFA: ${ttfa}ms · Tổng: ${totalElapsed}ms`;
+        metricRTF.textContent = `RTF: ${rtf}x (${dur.toFixed(1)}s audio)`;
+      };
+      audioPlayer.play().catch(() => {});
+    } else {
+      // ---------------------------------------------------- Standard Batch
+      streamingIndicator.style.display = 'none';
+      const elapsed = Math.round(performance.now() - t0);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+
+      audioPlayer.src = url;
+      downloadBtn.href = url;
+      downloadBtn.download = `kokoro_${voiceSelect.value}_${Date.now()}.${format}`;
+
+      audioPlayer.onloadedmetadata = () => {
+        const dur = audioPlayer.duration;
+        const rtf = dur > 0 ? (elapsed / 1000 / dur).toFixed(2) : '0.00';
+        metricFormat.textContent = `${format.toUpperCase()} · 24kHz Mono`;
+        metricLatency.textContent = `Thời gian xử lý: ${elapsed}ms`;
+        metricRTF.textContent = `RTF: ${rtf}x (${dur.toFixed(1)}s audio)`;
+      };
+      audioPlayer.play().catch(() => {});
+    }
   } catch (err) {
     alert('Lỗi: ' + err.message);
   } finally {
