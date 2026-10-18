@@ -340,12 +340,14 @@ async def create_speech(
     streaming = stream_format in ("sse", "audio")
 
     logger.info(
-        "synthesize %d chars | voice=%s speed=%.2f format=%s stream=%s",
+        "synthesize %d chars | voice=%s speed=%.2f format=%s stream=%s task=%s lang=%s",
         len(req.input),
         req.voice,
         req.speed,
         fmt,
         stream_format or "false",
+        req.task_type or "tts",
+        req.language or "vi",
     )
 
     # ------------------------------------------------------------- streaming
@@ -370,6 +372,11 @@ async def create_speech(
                 fmt=req.response_format,
                 volume_multiplier=req.volume_multiplier,
                 prefix=suffix,
+                language=req.language,
+                task_type=req.task_type,
+                instructions=req.instructions,
+                reference_audio=req.reference_audio,
+                use_speaker_embedding_only=req.use_speaker_embedding_only,
             )
             return StreamingResponse(
                 generator,
@@ -388,6 +395,11 @@ async def create_speech(
                 fmt=fmt,
                 volume_multiplier=req.volume_multiplier,
                 prefix=suffix,
+                language=req.language,
+                task_type=req.task_type,
+                instructions=req.instructions,
+                reference_audio=req.reference_audio,
+                use_speaker_embedding_only=req.use_speaker_embedding_only,
             )
             return StreamingResponse(
                 generator,
@@ -405,6 +417,11 @@ async def create_speech(
             voice=req.voice,
             speed=req.speed,
             volume_multiplier=req.volume_multiplier,
+            language=req.language,
+            task_type=req.task_type,
+            instructions=req.instructions,
+            reference_audio=req.reference_audio,
+            use_speaker_embedding_only=req.use_speaker_embedding_only,
         )
         return encode_audio(audio, req.response_format, engine.sample_rate)
 
@@ -437,6 +454,11 @@ async def _stream_sse(
     fmt: str,
     volume_multiplier: float,
     prefix: bytes,
+    language: str | None = "vi",
+    task_type: str | None = None,
+    instructions: str | None = None,
+    reference_audio: str | None = None,
+    use_speaker_embedding_only: bool | None = None,
 ) -> AsyncIterator[str]:
     """Generator for ``stream_format=sse``.
 
@@ -446,8 +468,16 @@ async def _stream_sse(
     """
 
     async for chunk, flush_flag in _threaded_stream(
-        text, voice=voice, speed=speed, fmt=fmt,
+        text,
+        voice=voice,
+        speed=speed,
+        fmt=fmt,
         volume_multiplier=volume_multiplier,
+        language=language,
+        task_type=task_type,
+        instructions=instructions,
+        reference_audio=reference_audio,
+        use_speaker_embedding_only=use_speaker_embedding_only,
     ):
         if prefix:
             delta = prefix + chunk
@@ -470,12 +500,25 @@ async def _stream_audio(
     fmt: str,
     volume_multiplier: float,
     prefix: bytes,
+    language: str | None = "vi",
+    task_type: str | None = None,
+    instructions: str | None = None,
+    reference_audio: str | None = None,
+    use_speaker_embedding_only: bool | None = None,
 ) -> AsyncIterator[bytes]:
     """Generator for ``stream_format=audio`` (raw-byte streaming)."""
     first = True
     async for chunk, flush_flag in _threaded_stream(
-        text, voice=voice, speed=speed, fmt=fmt,
+        text,
+        voice=voice,
+        speed=speed,
+        fmt=fmt,
         volume_multiplier=volume_multiplier,
+        language=language,
+        task_type=task_type,
+        instructions=instructions,
+        reference_audio=reference_audio,
+        use_speaker_embedding_only=use_speaker_embedding_only,
     ):
         data = (prefix + chunk) if first and prefix else chunk
         first = False
@@ -491,6 +534,11 @@ async def _threaded_stream(
     speed: float | None,
     fmt: str,
     volume_multiplier: float,
+    language: str | None = "vi",
+    task_type: str | None = None,
+    instructions: str | None = None,
+    reference_audio: str | None = None,
+    use_speaker_embedding_only: bool | None = None,
 ) -> AsyncIterator[tuple[bytes, bool]]:
     """Pull numpy chunks from the engine and encode them to bytes.
 
@@ -506,6 +554,11 @@ async def _threaded_stream(
                     voice=voice,
                     speed=speed,
                     volume_multiplier=volume_multiplier,
+                    language=language,
+                    task_type=task_type,
+                    instructions=instructions,
+                    reference_audio=reference_audio,
+                    use_speaker_embedding_only=use_speaker_embedding_only,
                 )
             )
         except APIError:
@@ -778,6 +831,49 @@ audio {
   border-radius: 6px;
   font-weight: 500;
 }
+details.advanced-box {
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid var(--panel-border);
+  border-radius: 10px;
+  padding: 0.85rem 1rem;
+  margin-top: 1.25rem;
+  transition: all 0.2s ease;
+}
+details.advanced-box[open] {
+  background: rgba(255, 255, 255, 0.04);
+}
+details.advanced-box summary {
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 0.88rem;
+  color: #60a5fa;
+  user-select: none;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.advanced-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 1rem;
+  margin-top: 1rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+.checkbox-item {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  font-size: 0.85rem;
+  color: var(--text);
+  cursor: pointer;
+}
+.checkbox-item input[type="checkbox"] {
+  width: 1.1rem;
+  height: 1.1rem;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
 </style>
 </head>
 <body>
@@ -823,13 +919,6 @@ audio {
         </select>
       </div>
       <div class="control-item">
-        <div class="range-header">
-          <label for="speed">Tốc độ (Speed)</label>
-          <span id="speed-val" style="color:#60a5fa; font-weight:600;">1.00x</span>
-        </div>
-        <input id="speed" type="range" min="0.5" max="2.0" step="0.05" value="1.0">
-      </div>
-      <div class="control-item">
         <label for="stream">Truyền phát (Stream)</label>
         <select id="stream">
           <option value="false" selected>Tải toàn bộ (Standard)</option>
@@ -837,7 +926,54 @@ audio {
           <option value="sse">OpenAI SSE</option>
         </select>
       </div>
+      <div class="control-item">
+        <div class="range-header">
+          <label for="speed">Tốc độ (Speed)</label>
+          <span id="speed-val" style="color:#60a5fa; font-weight:600;">1.00x</span>
+        </div>
+        <input id="speed" type="range" min="0.5" max="2.0" step="0.05" value="1.0">
+      </div>
     </div>
+
+    <details class="advanced-box">
+      <summary>⚙️ Tham số Nâng cao (GPUStack Playground Compatible)</summary>
+      <div class="advanced-grid">
+        <div class="control-item">
+          <label for="task-type">Task Type</label>
+          <input id="task-type" type="text" value="CustomVoice" placeholder="e.g. CustomVoice, TTS">
+        </div>
+        <div class="control-item">
+          <label for="language">Ngôn ngữ (Language)</label>
+          <select id="language">
+            <option value="vi" selected>vi (Tiếng Việt)</option>
+            <option value="en">en (English)</option>
+            <option value="auto">auto (Tự động)</option>
+          </select>
+        </div>
+        <div class="control-item">
+          <label for="max-tokens">Max New Tokens</label>
+          <input id="max-tokens" type="number" value="2048" min="64" max="8192">
+        </div>
+        <div class="control-item" style="grid-column: 1 / -1;">
+          <label for="instructions">Chỉ dẫn / Phong cách (Instructions)</label>
+          <input id="instructions" type="text" placeholder="e.g. Giọng hào hứng, ấm áp, nhịp nhàng...">
+        </div>
+        <div class="control-item" style="grid-column: 1 / -1;">
+          <label for="ref-audio">Reference Audio (Đường dẫn audio mẫu / Base64)</label>
+          <input id="ref-audio" type="text" placeholder="Đường dẫn file .wav / .pt hoặc Base64 audio">
+        </div>
+        <div class="control-item" style="grid-column: 1 / -1;">
+          <label for="ref-text">Transcript of Reference Audio (cho chế độ ICL)</label>
+          <input id="ref-text" type="text" placeholder="Nội dung lời thoại của Reference Audio (ICL mode)">
+        </div>
+        <div class="control-item" style="grid-column: 1 / -1;">
+          <label class="checkbox-item">
+            <input id="use-speaker-embedding-only" type="checkbox">
+            <span>Use Speaker Embedding Only (no ICL)</span>
+          </label>
+        </div>
+      </div>
+    </details>
 
     <button class="btn-generate" id="generate" onclick="generateSpeech()">
       <span id="btn-icon">▶</span>
@@ -936,6 +1072,23 @@ async function generateSpeech() {
   if (streamMode !== 'false') {
     body.stream_format = streamMode;
   }
+
+  // GPUStack Advanced Parameters
+  const taskType = document.getElementById('task-type').value.trim();
+  const language = document.getElementById('language').value;
+  const maxTokens = document.getElementById('max-tokens').value;
+  const instructions = document.getElementById('instructions').value.trim();
+  const refAudio = document.getElementById('ref-audio').value.trim();
+  const refText = document.getElementById('ref-text').value.trim();
+  const useSpeakerEmbeddingOnly = document.getElementById('use-speaker-embedding-only').checked;
+
+  if (taskType) body.task_type = taskType;
+  if (language) body.language = language;
+  if (maxTokens) body.max_new_tokens = parseInt(maxTokens, 10);
+  if (instructions) body.instructions = instructions;
+  if (refAudio) body.reference_audio = refAudio;
+  if (refText) body.transcript_of_reference_audio = refText;
+  if (useSpeakerEmbeddingOnly) body.use_speaker_embedding_only = true;
 
   const t0 = performance.now();
   try {

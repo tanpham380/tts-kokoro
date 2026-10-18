@@ -148,11 +148,21 @@ class VoiceRuntime:
             audio = self.model(phonemes, ref_s, float(speed))
         return np.asarray(audio.detach().cpu().numpy(), dtype=np.float32)
 
-    def sentences(self, text: str, speed: float) -> Iterator[np.ndarray]:
+    def sentences(
+        self,
+        text: str,
+        speed: float,
+        language: str = "vi",
+    ) -> Iterator[np.ndarray]:
         """Yield one array per sentence, in order."""
         from kokoro_vietnamese import phonemize, split_text
 
-        clean_text = normalize_vietnamese_text(text)
+        # Only apply Vietnamese acronyms & standalone letter fix if language is vi or auto
+        if language in ("vi", "auto"):
+            clean_text = normalize_vietnamese_text(text)
+        else:
+            clean_text = unicodedata.normalize("NFC", text).strip()
+
         for text_chunk in split_text(clean_text):
             for piece in _fit_phonemes(text_chunk):
                 phonemes = phonemize(piece)
@@ -462,6 +472,11 @@ class TTSEngine:
         speed: float | None = None,
         crossfade_ms: int | None = None,
         volume_multiplier: float = 1.0,
+        language: str | None = "vi",
+        task_type: str | None = None,
+        instructions: str | None = None,
+        reference_audio: str | None = None,
+        use_speaker_embedding_only: bool | None = None,
     ) -> np.ndarray:
         """Synthesize ``text`` into one float32 mono array."""
         audio = concat(
@@ -472,6 +487,11 @@ class TTSEngine:
                     speed=speed,
                     crossfade_ms=crossfade_ms,
                     volume_multiplier=volume_multiplier,
+                    language=language,
+                    task_type=task_type,
+                    instructions=instructions,
+                    reference_audio=reference_audio,
+                    use_speaker_embedding_only=use_speaker_embedding_only,
                 )
             )
         )
@@ -492,6 +512,11 @@ class TTSEngine:
         speed: float | None = None,
         crossfade_ms: int | None = None,
         volume_multiplier: float = 1.0,
+        language: str | None = "vi",
+        task_type: str | None = None,
+        instructions: str | None = None,
+        reference_audio: str | None = None,
+        use_speaker_embedding_only: bool | None = None,
     ) -> Iterator[np.ndarray]:
         """Yield audio sentence by sentence, crossfading the joins.
 
@@ -507,6 +532,15 @@ class TTSEngine:
                 str(exc), status_code=400, code="invalid_voice", param="voice"
             ) from exc
 
+        if instructions:
+            logger.debug("GPUStack instructions received: %s", instructions)
+        if reference_audio:
+            logger.debug(
+                "GPUStack reference_audio: %s (speaker_embedding_only: %s)",
+                reference_audio,
+                use_speaker_embedding_only,
+            )
+
         runtime = self._runtime_for(resolved)
         pace = float(speed if speed is not None else self.settings.speed)
         fade = self.settings.crossfade_ms if crossfade_ms is None else crossfade_ms
@@ -518,7 +552,8 @@ class TTSEngine:
         failed = True
         try:
             held: np.ndarray | None = None
-            for chunk in runtime.sentences(text, pace):
+            lang = language or "vi"
+            for chunk in runtime.sentences(text, pace, language=lang):
                 if volume_multiplier != 1.0:
                     chunk = (chunk * float(volume_multiplier)).astype(np.float32)
                 if held is not None:

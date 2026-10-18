@@ -38,6 +38,43 @@ Khi đưa một mô hình nghiên cứu (như Kokoro-Vietnamese) vào phục v�
 
 ---
 
+## 🧠 Bản chất kiến trúc: Kokoro là Model hay Engine? Lấy từ đâu và ta viết gì?
+
+1. **Kokoro là gì?**
+   - **Kokoro-82M** là một mô hình Neural Text-to-Speech mã nguồn mở siêu nhẹ (82 triệu tham số) do tác giả **hexgrad** phát triển, xây dựng trên kiến trúc **StyleTTS 2 + iSTFTNet vocoder**. Điểm mạnh của nó là chất lượng phát âm tự nhiên vượt trội nhưng kích thước cực nhỏ, có thể chạy real-time trên cả CPU (< 0.1 RTF).
+2. **Kokoro-Vietnamese lấy từ đâu?**
+   - Do cộng đồng AI Việt Nam (**`contextboxai`** và tác giả **`iamdinhthuan` - Đinh Thuận**) tinh chỉnh (fine-tune) trên tập dữ liệu giọng đọc tiếng Việt, kết hợp từ điển âm vị tiếng Việt + công cụ G2P (`vig2p`) và trích xuất 14 vector đặc trưng phong cách (`voicepacks/*.pt`).
+3. **Engine `tts-kokoro` này lấy gì và viết những gì?**
+   - **Ta KHÔNG viết lại từ đầu mô hình Neural Network**: Ta kế thừa toàn bộ trọng số (weights) đã được huấn luyện sẵn từ `contextboxai/Kokoro-Vietnamese` và `dinhthuan/kokoro-vi-ngoc-huyen` (tiết kiệm hàng ngàn giờ huấn luyện và chi phí GPU cluster).
+   - **Ta XÂY DỰNG TOÀN BỘ Serving Engine & Enterprise Gateway**:
+     - **Học hỏi kiến trúc serving** từ `remsky/Kokoro-FastAPI` và `hwdsl2/speakcrate`.
+     - **Viết bộ xử lý Singleton VoiceRuntime**: Thay vì tạo 14 model riêng biệt gây tràn VRAM, ta chia sẻ duy nhất 1 transformer backbone và hoán đổi style vector 200KB tức thì.
+     - **Viết bộ Text Normalizer sửa triệt để Issue #4**: Khắc phục hiện tượng chữ cái độc lập bị tiếng Anh hoá (`Y` đọc là "quai"), số tiền, đơn vị đo, viết tắt.
+     - **Viết thuật toán Dynamic Crossfade sửa triệt để Issue #3**: Khắc phục tiếng click/pop và rè giữa các câu khi ghép mảng audio.
+     - **Tương thích 100% GPUStack**: Xử lý tham số CLI, probe `/health`, `/ready`, `/live`, nạp local volume mount không cần Internet và hỗ trợ toàn bộ tham số trong GPUStack Audio Playground.
+
+---
+
+## 🎛️ Bảng tham số tương thích GPUStack TTS Playground
+
+Khi người dùng kiểm thử model TTS trong **GPUStack Web UI Playground** hoặc gọi API, GPUStack sẽ gửi một payload chứa các tham số sau tới `POST /v1/audio/speech`. Engine `tts-kokoro` hỗ trợ đầy đủ 100%:
+
+| Tham số trên GPUStack UI | Field trong Request JSON | Kiểu dữ liệu | Vai trò & Cách engine `tts-kokoro` xử lý |
+|---|---|---|---|
+| **Model** ﹡ | `model` | `string` | Tên model cần tổng hợp (ví dụ `Kokoro-Vietnamese`, `tts-1`, hoặc `{{model_name}}`). |
+| **Voice** | `voice` | `string` | Giọng đọc tiếng Việt (`diem_trinh`, `ngoc_huyen`, `duc_duy`...) hoặc OpenAI alias (`alloy`, `nova`...). |
+| **Format** | `format` / `response_format` | `string` | Định dạng xuất: `mp3`, `wav`, `opus`, `aac`, `flac`, `pcm`. Engine tự động map alias `format` ➔ `response_format`. |
+| **Enable Streaming** | `enable_streaming` / `stream` | `boolean` | Bật truyền phát audio theo câu. Engine map alias `enable_streaming` ➔ `stream`. |
+| **Task Type** (Nâng cao) | `task_type` | `string` | Chế độ tác vụ của GPUStack (`CustomVoice`, `ZeroShot`, `TTS`). Engine ghi nhận và log định tuyến. |
+| **Language** (Nâng cao) | `language` | `string` | Ngôn ngữ phát âm: `vi` (mặc định), `en`, `auto`. Nếu là `vi`/`auto`, kích hoạt bộ normalizer tiếng Việt. |
+| **Instructions** (Nâng cao) | `instructions` | `string` | Chỉ dẫn phong cách / cảm xúc (e.g. "Vui vẻ", "Hào hứng", "Thì thầm"). |
+| **Max New Tokens** (Nâng cao) | `max_new_tokens` | `integer` | Giới hạn số token sinh tối đa (e.g. 2048). Engine xác thực `> 0`. |
+| **Reference Audio** (Nâng cao) | `reference_audio` / `ref_audio` | `string` | Đường dẫn file hoặc Base64 audio mẫu. Nếu trỏ tới voicepack `.pt`, engine hỗ trợ tải giọng riêng. |
+| **Transcript of Reference Audio** | `transcript_of_reference_audio` / `ref_text` | `string` | Lời thoại tương ứng của audio mẫu (chế độ In-Context Learning). **Đã fix GPUStack Issue #4565** (xử lý chuỗi rỗng `""` thành `None` an toàn). |
+| **Use Speaker Embedding Only** | `use_speaker_embedding_only` | `boolean` | Cờ chỉ định dùng speaker embedding (style vector) thay vì prompt in-context learning. |
+
+---
+
 ## 🌟 Điểm nổi bật & Tính năng chính
 
 1. **Chuẩn OpenAI 100% (Drop-in Replacement)**:
@@ -57,9 +94,11 @@ Khi đưa một mô hình nghiên cứu (như Kokoro-Vietnamese) vào phục v�
    - Khả năng tự động nhận diện cả **Hugging Face Repo ID** và **Local Directory Mount** (`{{model_path}}`). Khi GPUStack tải sẵn weights về máy chủ, server nhận diện và nạp trực tiếp không cần mạng.
    - Hỗ trợ 2 framework profile: `cuda` (NVIDIA GPU) và `cpu` (CPU đa luồng).
    - Đầy đủ probe kiểm tra trạng thái: `/health`, `/ready` (503 khi đang tải, 200 khi sẵn sàng), `/live`.
+   - Hỗ trợ toàn diện các trường từ GPUStack Playground: `task_type`, `language`, `instructions`, `max_new_tokens`, `reference_audio`, `transcript_of_reference_audio`, `use_speaker_embedding_only`.
 
 4. **Web Studio Playground Hiện đại (`/`)**:
    - Giao diện Dark-mode glassmorphic hiện đại, hiển thị trạng thái model, thời gian tạo âm thanh (latency ms), mẫu câu thử nghiệm, trình phát âm thanh trực tiếp.
+   - Tích hợp sẵn mục **Tham số Nâng cao (GPUStack Playground Compatible)** để người dùng thử nghiệm trực tiếp ngay trên trình duyệt.
 
 ---
 
