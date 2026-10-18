@@ -33,7 +33,10 @@ default_env:
   # MAX_QUEUE: "256"      # Max waiting queue before 503
 version_configs:
   "1.0.0":
-    image_name: kokoro-vi-server:gpu
+    # Built and pushed by GitLab CI to the container registry:
+    #   registry.gitlab.huongnghiepaau.com/dev/tts-koroko:latest-gpu
+    #   registry.gitlab.huongnghiepaau.com/dev/tts-koroko/tts-kokoro-server:latest-gpu
+    image_name: registry.gitlab.huongnghiepaau.com/dev/tts-koroko:latest-gpu
     custom_framework: cuda
     run_command: >-
       --model-path {{model_path}}
@@ -41,7 +44,10 @@ version_configs:
       --host {{worker_ip}}
       --port {{port}}
   "1.0.0-cpu":
-    image_name: kokoro-vi-server:cpu
+    # Built and pushed by GitLab CI:
+    #   registry.gitlab.huongnghiepaau.com/dev/tts-koroko:latest-cpu
+    #   registry.gitlab.huongnghiepaau.com/dev/tts-koroko/tts-kokoro-server:latest-cpu
+    image_name: registry.gitlab.huongnghiepaau.com/dev/tts-koroko:latest-cpu
     custom_framework: cpu
     env:
       DEVICE: cpu

@@ -35,7 +35,7 @@ services:
     <<: *common
     build:
       context: ..
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.cpu
     image: kokoro-vi-server:cpu
     container_name: kokoro-vi-server-cpu
     ports:

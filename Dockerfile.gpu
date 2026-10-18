@@ -1,12 +1,12 @@
 # syntax=docker/dockerfile:1
 # --------------------------------------------------------------------------- #
-# GPU Dockerfile: nvidia/cuda runtime + torch cu124 / cu121 wheel
-# Multi-stage build with Astral uv for minimal image size and fast build time.
+# GPU Dockerfile: nvidia/cuda runtime + torch cu126 / cu124 wheel
+# Matches QUAN-ASR Dockerfile (GPU) architecture.
 # --------------------------------------------------------------------------- #
 
-ARG CUDA=12.4.1
+ARG CUDA=12.6.1
 ARG PYTHON_VERSION=3.11
-ARG TORCH_INDEX=https://download.pytorch.org/whl/cu124
+ARG TORCH_INDEX=https://download.pytorch.org/whl/cu126
 
 # --------------------------------------------------------------------------- #
 # Stage 1: Builder
