@@ -310,3 +310,44 @@ def test_normalize_vietnamese_abbreviations():
     assert "phần trăm" in normalize_vietnamese_text("tăng trưởng 100%")
     assert "ki lô mét" in normalize_vietnamese_text("khoảng cách 15km")
 
+
+def test_gpustack_local_directory_mount_resolution(tmp_path, monkeypatch):
+    """Test that when GPUStack mounts a model directory, files are resolved locally without HF download."""
+    import sys
+    from types import ModuleType
+
+    # Create fake model directory mimicking dinhthuan/kokoro-vi-ngoc-huyen
+    model_dir = tmp_path / "kokoro-vi-ngoc-huyen"
+    model_dir.mkdir()
+    (model_dir / "kokoro_vi_ngoc_huyen.pth").write_text("fake-weights")
+    (model_dir / "config.json").write_text("{}")
+    voices_dir = model_dir / "voices"
+    voices_dir.mkdir()
+    (voices_dir / "diem_trinh.pt").write_text("fake-voicepack")
+
+    captured_init = {}
+
+    class MockKokoroVietnamese:
+        def __init__(self, **kwargs):
+            captured_init.update(kwargs)
+            self.model = FakeModel()
+            self.voicepack = FakeVoicepack()
+            self.device = "cpu"
+
+    # Mock module if not present in test environment
+    if "kokoro_vietnamese" not in sys.modules:
+        mock_mod = ModuleType("kokoro_vietnamese")
+        mock_mod.KokoroVietnamese = MockKokoroVietnamese
+        mock_mod.resolve_voicepack_filename = lambda v, _: f"{v}.pt"
+        monkeypatch.setitem(sys.modules, "kokoro_vietnamese", mock_mod)
+    else:
+        monkeypatch.setattr("kokoro_vietnamese.KokoroVietnamese", MockKokoroVietnamese)
+
+    engine = TTSEngine(Settings(model_path=str(model_dir), default_voice="diem_trinh"))
+    runtime = engine._build_runtime("diem_trinh")
+
+    assert captured_init["model_path"] == str(model_dir / "kokoro_vi_ngoc_huyen.pth")
+    assert captured_init["config_path"] == str(model_dir / "config.json")
+    assert captured_init["voicepack_path"] == str(voices_dir / "diem_trinh.pt")
+    assert runtime.id == "diem_trinh"
+

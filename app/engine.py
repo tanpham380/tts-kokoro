@@ -333,26 +333,58 @@ class TTSEngine:
         from kokoro_vietnamese import KokoroVietnamese
 
         if self._model is None:
-            # Only the first instance pays for the network and the download.
+            # When GPUStack mounts models to a local directory, resolve files locally
+            # to guarantee zero network calls / zero redundant downloads.
             model_dir = Path(self.settings.model_path)
             model_file = self.settings.model_file
             config_file = self.settings.config_file
             repo_id = self.settings.model_path
+            voicepack_file: str | None = None
 
             if model_dir.is_dir():
-                # GPUStack mounts models to a local directory
-                candidate_model = model_dir / model_file
-                if candidate_model.exists():
-                    model_file = str(candidate_model)
-                candidate_cfg = model_dir / config_file
-                if candidate_cfg.exists():
-                    config_file = str(candidate_cfg)
+                # 1. Resolve model checkpoint (supports both contextboxai & dinhthuan variants)
+                model_candidates = [
+                    model_dir / model_file,
+                    model_dir / "kokoro_vi.pth",
+                    model_dir / "kokoro_vi_ngoc_huyen.pth",
+                    model_dir / "model" / "kokoro_vi_ngoc_huyen.pth",
+                ]
+                for cand in model_candidates:
+                    if cand.is_file():
+                        model_file = str(cand)
+                        break
+                else:
+                    pth_files = sorted(list(model_dir.glob("*.pth")) + list(model_dir.glob("*/*.pth")))
+                    if pth_files:
+                        model_file = str(pth_files[0])
+
+                # 2. Resolve config.json
+                cfg_candidates = [
+                    model_dir / config_file,
+                    model_dir / "config.json",
+                ]
+                for cand in cfg_candidates:
+                    if cand.is_file():
+                        config_file = str(cand)
+                        break
+
+                # 3. Resolve initial voicepack locally
+                vp_candidates = [
+                    model_dir / "voicepacks" / f"{voice}.pt",
+                    model_dir / "voices" / f"{voice}.pt",
+                    model_dir / f"{voice}.pt",
+                ]
+                for cand in vp_candidates:
+                    if cand.is_file():
+                        voicepack_file = str(cand)
+                        break
 
             first = KokoroVietnamese(
                 repo_id=repo_id,
                 voice=voice,
                 model_path=model_file,
                 config_path=config_file,
+                voicepack_path=voicepack_file,
                 device=self._device or "cpu",
             )
             self._model = first.model
@@ -392,6 +424,7 @@ class TTSEngine:
         if model_dir.is_dir():
             candidates = [
                 model_dir / "voicepacks" / f"{voice}.pt",
+                model_dir / "voices" / f"{voice}.pt",
                 model_dir / f"{voice}.pt",
                 model_dir / resolve_voicepack_filename(voice, None),
             ]
