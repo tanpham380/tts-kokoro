@@ -1,308 +1,454 @@
-# Kokoro-Vietnamese TTS Server (FastAPI & GPUStack Compatible)
+<div align="center">
 
-> 💡 **Lưu ý phân biệt hệ thống**: Dự án này là **Text-to-Speech (TTS Engine)** – chuyển đổi văn bản thành giọng nói tiếng Việt, hoàn toàn độc lập với dự án `quan-asr` (vốn là hệ thống **Speech-to-Text / STT / ASR**).
+# Kokoro-Vietnamese TTS Server
 
-Máy chủ Text-to-Speech (TTS) hiệu năng cao, chuẩn hóa 100% theo API OpenAI (`POST /v1/audio/speech`), tích hợp mô hình **[Kokoro-Vietnamese](https://huggingface.co/contextboxai/Kokoro-Vietnamese)** (`contextboxai/Kokoro-Vietnamese`) cùng biến thể fine-tune **[dinhthuan/kokoro-vi-ngoc-huyen](https://huggingface.co/dinhthuan/kokoro-vi-ngoc-huyen)**, hỗ trợ 14 giọng đọc tiếng Việt mượt mà và tương thích trực tiếp với nền tảng quản lý mô hình **GPUStack**.
+[![Python 3.10+](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://www.python.org/downloads/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.115+-00a393.svg)](https://fastapi.tiangolo.com/)
+[![OpenAI Compatible](https://img.shields.io/badge/OpenAI-API%20Compatible-412991.svg)](https://github.com/openai/openai-python)
+[![GPUStack](https://img.shields.io/badge/GPUStack-Ready-ff6900.svg)](https://github.com/gpustack/gpustack)
+[![License](https://img.shields.io/badge/License-Apache%202.0-green.svg)](https://www.apache.org/licenses/LICENSE-2.0)
+[![Hugging Face](https://img.shields.io/badge/%F0%9F%A4%97%20Model-Hugging%20Face-ffd21e.svg)](https://huggingface.co/contextboxai/Kokoro-Vietnamese)
 
----
+**High-performance Vietnamese Text-to-Speech API server** — 100% OpenAI-compatible, streaming-ready, and designed for production deployment.
 
-## 🔬 Phân Tích & Giải Pháp Kỹ Thuật Cho Engine Thực Tế (Production-Grade)
-
-Khi đưa một mô hình nghiên cứu (như Kokoro-Vietnamese) vào phục vụ thực tế (serving production) tương tự **SpeakCrate** và **Kokoro-FastAPI**, hệ thống đã giải quyết triệt để các bài toán cốt lõi sau:
-
-### 1. Xử lý triệt để Issue #4: Lỗi phát âm chữ cái đơn (`Y` -> "quai")
-- **Nguyên nhân gốc rễ**: Khi văn bản có các ký tự đơn lẻ đứng độc lập (như "Khoa Y", "Bác sĩ Y", "nhóm máu A, B, O", "Vitamin C", "Gen Y"), bộ phonemizer fallback tiếng Anh (Misaki/eSpeak) sẽ nhận diện đây là bảng chữ cái tiếng Anh và phát âm thành tên chữ cái tiếng Anh ("Y" thành "quai/wai", "A" thành "ei", "O" thành "âu").
-- **Giải pháp trong engine**: Xây dựng tầng tiền xử lý [`normalize_vietnamese_text`](file:///Users/apple/Desktop/dev/tts-kokoro/app/engine.py#L90) với bộ quy tắc regex ranh giới từ `STANDALONE_LETTER_FIXES`:
-  - `\bY\b`, `\by\b` ➔ `i` (đọc chuẩn âm /i/ của tiếng Việt, ví dụ "khoa Y" đọc là "khoa i").
-  - `\bA\b` ➔ `a`, `\bB\b` ➔ `bê`, `\bC\b` ➔ `xê`, `\bD\b` ➔ `dê`, `\bO\b` ➔ `o`, `\bU\b` ➔ `u`.
-  - Mở rộng chuẩn hóa viết tắt thông dụng: `TP.HCM` ➔ `Thành phố Hồ Chí Minh`, `VN` ➔ `Việt Nam`, `15km` ➔ `15 ki lô mét`, `100k` ➔ `100 nghìn`, `100%` ➔ `100 phần trăm`.
-
-### 2. Tích hợp sâu G2P Tiếng Việt (`vig2p`)
-- Tích hợp trực tiếp thư viện **`vig2p`** để đảm bảo phân tách âm tiết tiếng Việt, giữ vững độ tương phản âm đầu (`t/th`, `tr/ch`, `s/x`, `d/gi`) và hệ thống thanh điệu 6 thanh chuẩn của tiếng Việt.
-
-### 3. Xử lý triệt để Issue #3: Tiếng rè và click giật xen kẽ giữa các câu
-- **Nguyên nhân**: Khi đọc văn bản dài, mô hình tách thành nhiều câu nhỏ để giải mã. Nếu chỉ ghép mảng đơn thuần (`np.concatenate`), bước nhảy pha (phase jump) và độ lệch biên độ tại điểm nối tạo ra các tiếng "click/pop" và tiếng rè rẹt khó chịu.
-- **Giải pháp**: Áp dụng thuật toán **Dynamic Linear Crossfade (50ms)** tại [`app/audio.py:crossfade`](file:///Users/apple/Desktop/dev/tts-kokoro/app/audio.py#L213). Hai câu kế tiếp được làm mờ chéo mượt mà, triệt tiêu hoàn toàn tiếng rè giật.
-
-### 4. Tương thích mô hình fine-tune `dinhthuan/kokoro-vi-ngoc-huyen`
-- Tác giả Đinh Thuận đã huấn luyện lại riêng một checkpoint sạch cho giọng Ngọc Huyền tại `dinhthuan/kokoro-vi-ngoc-huyen` để khắc phục lỗi rè của voicepack gốc.
-- Engine hỗ trợ cơ chế tự động tìm kiếm thông minh: hỗ trợ cả cấu trúc của repo gốc `contextboxai/Kokoro-Vietnamese` (`kokoro_vi.pth`, `voicepacks/*.pt`) lẫn cấu trúc của `dinhthuan/kokoro-vi-ngoc-huyen` (`model/kokoro_vi_ngoc_huyen.pth`, `voices/*.pt`).
-
-### 5. Tối ưu hóa bộ nhớ RAM/VRAM (Shared Model Architecture)
-- Học hỏi từ `Kokoro-FastAPI` và `speakcrate`: Mô hình neural network Kokoro 82M (`KModel`) chỉ cần nạp **duy nhất 1 bản** vào RAM/VRAM. Cả 14 giọng nói tiếng Việt chỉ là các vector đặc trưng phong cách (`voicepack` ~200KB).
-- Thay vì nhân bản 14 model gây cạn kiệt VRAM, kiến trúc [`VoiceRuntime`](file:///Users/apple/Desktop/dev/tts-kokoro/app/engine.py#L125) tái sử dụng model dùng chung và hoán đổi voicepack tức thì trong vài micro-giây.
-
-### 6. Streaming kép chuẩn OpenAI & Raw Audio
-- **SSE Stream (`stream_format=sse`)**: Bắn sự kiện Server-Sent Events chuẩn OpenAI `speech.audio.delta` dùng cho các Web Chatbot (Open WebUI, LibreChat, Dify).
-- **Chunked Byte Stream (`stream_format=audio` hoặc `stream=true`)**: Truyền phát luồng byte âm thanh trực tiếp cho trình duyệt và các ứng dụng phát audio Native.
+</div>
 
 ---
 
-## 🧠 Bản chất kiến trúc: Kokoro là Model hay Engine? Lấy từ đâu và ta viết gì?
+## Table of Contents
 
-1. **Kokoro là gì?**
-   - **Kokoro-82M** là một mô hình Neural Text-to-Speech mã nguồn mở siêu nhẹ (82 triệu tham số) do tác giả **hexgrad** phát triển, xây dựng trên kiến trúc **StyleTTS 2 + iSTFTNet vocoder**. Điểm mạnh của nó là chất lượng phát âm tự nhiên vượt trội nhưng kích thước cực nhỏ, có thể chạy real-time trên cả CPU (< 0.1 RTF).
-2. **Kokoro-Vietnamese lấy từ đâu?**
-   - Do cộng đồng AI Việt Nam (**`contextboxai`** và tác giả **`iamdinhthuan` - Đinh Thuận**) tinh chỉnh (fine-tune) trên tập dữ liệu giọng đọc tiếng Việt, kết hợp từ điển âm vị tiếng Việt + công cụ G2P (`vig2p`) và trích xuất 14 vector đặc trưng phong cách (`voicepacks/*.pt`).
-3. **Engine `tts-kokoro` này lấy gì và viết những gì?**
-   - **Ta KHÔNG viết lại từ đầu mô hình Neural Network**: Ta kế thừa toàn bộ trọng số (weights) đã được huấn luyện sẵn từ `contextboxai/Kokoro-Vietnamese` và `dinhthuan/kokoro-vi-ngoc-huyen` (tiết kiệm hàng ngàn giờ huấn luyện và chi phí GPU cluster).
-   - **Ta XÂY DỰNG TOÀN BỘ Serving Engine & Enterprise Gateway**:
-     - **Học hỏi kiến trúc serving** từ `remsky/Kokoro-FastAPI` và `hwdsl2/speakcrate`.
-     - **Viết bộ xử lý Singleton VoiceRuntime**: Thay vì tạo 14 model riêng biệt gây tràn VRAM, ta chia sẻ duy nhất 1 transformer backbone và hoán đổi style vector 200KB tức thì.
-     - **Viết bộ Text Normalizer sửa triệt để Issue #4**: Khắc phục hiện tượng chữ cái độc lập bị tiếng Anh hoá (`Y` đọc là "quai"), số tiền, đơn vị đo, viết tắt.
-     - **Viết thuật toán Dynamic Crossfade sửa triệt để Issue #3**: Khắc phục tiếng click/pop và rè giữa các câu khi ghép mảng audio.
-     - **Tương thích 100% GPUStack**: Xử lý tham số CLI, probe `/health`, `/ready`, `/live`, nạp local volume mount không cần Internet và hỗ trợ toàn bộ tham số trong GPUStack Audio Playground.
-
----
-
-## 🎛️ Bảng tham số tương thích GPUStack TTS Playground
-
-Khi người dùng kiểm thử model TTS trong **GPUStack Web UI Playground** hoặc gọi API, GPUStack sẽ gửi một payload chứa các tham số sau tới `POST /v1/audio/speech`. Engine `tts-kokoro` hỗ trợ đầy đủ 100%:
-
-| Tham số trên GPUStack UI | Field trong Request JSON | Kiểu dữ liệu | Vai trò & Cách engine `tts-kokoro` xử lý |
-|---|---|---|---|
-| **Model** ﹡ | `model` | `string` | Tên model cần tổng hợp (ví dụ `Kokoro-Vietnamese`, `tts-1`, hoặc `{{model_name}}`). |
-| **Voice** | `voice` | `string` | Giọng đọc tiếng Việt (`diem_trinh`, `ngoc_huyen`, `duc_duy`...) hoặc OpenAI alias (`alloy`, `nova`...). |
-| **Format** | `format` / `response_format` | `string` | Định dạng xuất: `mp3`, `wav`, `opus`, `aac`, `flac`, `pcm`. Engine tự động map alias `format` ➔ `response_format`. |
-| **Enable Streaming** | `enable_streaming` / `stream` | `boolean` | Bật truyền phát audio theo câu. Engine map alias `enable_streaming` ➔ `stream`. |
-| **Task Type** (Nâng cao) | `task_type` | `string` | Chế độ tác vụ của GPUStack (`CustomVoice`, `ZeroShot`, `TTS`). Engine ghi nhận và log định tuyến. |
-| **Language** (Nâng cao) | `language` | `string` | Ngôn ngữ phát âm: `vi` (mặc định), `en`, `auto`. Nếu là `vi`/`auto`, kích hoạt bộ normalizer tiếng Việt. |
-| **Instructions** (Nâng cao) | `instructions` | `string` | Chỉ dẫn phong cách / cảm xúc (e.g. "Vui vẻ", "Hào hứng", "Thì thầm"). |
-| **Max New Tokens** (Nâng cao) | `max_new_tokens` | `integer` | Giới hạn số token sinh tối đa (e.g. 2048). Engine xác thực `> 0`. |
-| **Reference Audio** (Nâng cao) | `reference_audio` / `ref_audio` | `string` | Đường dẫn file hoặc Base64 audio mẫu. Nếu trỏ tới voicepack `.pt`, engine hỗ trợ tải giọng riêng. |
-| **Transcript of Reference Audio** | `transcript_of_reference_audio` / `ref_text` | `string` | Lời thoại tương ứng của audio mẫu (chế độ In-Context Learning). **Đã fix GPUStack Issue #4565** (xử lý chuỗi rỗng `""` thành `None` an toàn). |
-| **Use Speaker Embedding Only** | `use_speaker_embedding_only` | `boolean` | Cờ chỉ định dùng speaker embedding (style vector) thay vì prompt in-context learning. |
+- [Overview](#overview)
+- [Features](#features)
+- [Prerequisites](#prerequisites)
+- [Quick Start](#quick-start)
+  - [Local Installation](#local-installation)
+  - [Docker & Docker Compose](#docker--docker-compose)
+- [API Reference](#api-reference)
+- [OpenAI Client Examples](#openai-client-examples)
+- [Voices](#voices)
+- [Environment Variables](#environment-variables)
+- [GPUStack Deployment](#gpustack-deployment)
+- [Web Studio Playground](#web-studio-playground)
+- [Project Structure](#project-structure)
+- [Architecture Overview](#architecture-overview)
+- [Testing](#testing)
+- [License](#license)
 
 ---
 
-## 🌟 Điểm nổi bật & Tính năng chính
+## Overview
 
-1. **Chuẩn OpenAI 100% (Drop-in Replacement)**:
-   - Endpoint chính: `POST /v1/audio/speech`
-   - Tra cứu danh sách model: `GET /v1/models`
-   - Tra cứu danh sách voice: `GET /v1/voices` và `GET /v1/audio/voices`
-   - Tương thích tức thì với các thư viện chính thức: `openai-python`, `openai-node`, Open WebUI, Dify, LangChain, v.v.
+This project wraps the **[Kokoro-Vietnamese](https://huggingface.co/contextboxai/Kokoro-Vietnamese)** model (based on [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M) by hexgrad, StyleTTS 2 + iSTFTNet) into a production-grade **FastAPI** server that speaks Vietnamese naturally.
 
-2. **14 Voicepacks tiếng Việt & Ánh xạ OpenAI Aliases**:
-   - **Giọng Nữ**: `diem_trinh` (mặc định), `mai_linh`, `mai_loan`, `my_yen`, `ngoc_huyen`, `thuc_trinh`.
-   - **Giọng Nam**: `duc_an`, `duc_duy`, `hung_thinh`, `manh_dung`, `phat_tai`, `thanh_dat`, `tuan_ngoc`.
-   - **Giọng Kể chuyện / Audio book**: `storyvert`.
-   - **OpenAI Voice Aliases**: Tự động ánh xạ `alloy`, `nova`, `onyx`, `echo`, `shimmer`, `fable`, `coral`, v.v. sang giọng Việt tương ứng theo giới tính.
+It serves a drop-in replacement for OpenAI's `POST /v1/audio/speech` endpoint, supports 14 Vietnamese voicepacks, and is purpose-built for deployment platforms like **GPUStack**.
 
-3. **Tương thích hoàn hảo với GPUStack**:
-   - Cung cấp sẵn manifest `deploy/gpustack-backend.yaml` và `deploy/gpustack-backend-source.yaml`.
-   - Khả năng tự động nhận diện cả **Hugging Face Repo ID** và **Local Directory Mount** (`{{model_path}}`). Khi GPUStack tải sẵn weights về máy chủ, server nhận diện và nạp trực tiếp không cần mạng.
-   - Hỗ trợ 2 framework profile: `cuda` (NVIDIA GPU) và `cpu` (CPU đa luồng).
-   - Đầy đủ probe kiểm tra trạng thái: `/health`, `/ready` (503 khi đang tải, 200 khi sẵn sàng), `/live`.
-   - Hỗ trợ toàn diện các trường từ GPUStack Playground: `task_type`, `language`, `instructions`, `max_new_tokens`, `reference_audio`, `transcript_of_reference_audio`, `use_speaker_embedding_only`.
+### Key Highlights
 
-4. **Web Studio Playground Hiện đại (`/`)**:
-   - Giao diện Dark-mode glassmorphic hiện đại, hiển thị trạng thái model, thời gian tạo âm thanh (latency ms), mẫu câu thử nghiệm, trình phát âm thanh trực tiếp.
-   - Tích hợp sẵn mục **Tham số Nâng cao (GPUStack Playground Compatible)** để người dùng thử nghiệm trực tiếp ngay trên trình duyệt.
+| Aspect | Detail |
+|---|---|
+| **Model** | Kokoro-Vietnamese (82M params, StyleTTS 2 architecture) |
+| **API Standard** | OpenAI-compatible (`/v1/audio/speech`) |
+| **Voices** | 14 Vietnamese voicepacks + OpenAI aliases |
+| **Streaming** | OpenAI SSE (`speech.audio.delta`) + raw audio chunks |
+| **Languages** | Vietnamese (primary), English fallback |
+| **License** | Apache-2.0 |
 
 ---
 
-## 📂 Cấu trúc mã nguồn
+## Features
 
-```
-tts-kokoro/
-├── app/
-│   ├── __init__.py         # Phiên bản máy chủ
-│   ├── audio.py            # Xử lý PCM, container encoding (ffmpeg / soundfile), crossfade, streaming headers
-│   ├── cli.py              # CLI entrypoint hỗ trợ cờ GPUStack (--model-path, --host, --port, v.v.)
-│   ├── config.py           # Quản lý cấu hình qua biến môi trường Settings
-│   ├── engine.py           # Quản lý vòng đời KokoroVietnamese, nạp voicepack, sentence decode & concurrency gate
-│   ├── schemas.py          # Pydantic schemas chuẩn OpenAI Request / Error Envelope
-│   ├── server.py           # FastAPI routes (/v1/audio/speech, /v1/models, /v1/voices, /health, Studio UI)
-│   └── voices.py           # Danh mục 14 giọng Việt, ánh xạ OpenAI alias, chuẩn hóa tên
-├── deploy/
-│   ├── gpustack-backend.yaml        # GPUStack Custom Inference Backend manifest
-│   └── gpustack-backend-source.yaml # GPUStack InferenceBackendSource definition
-├── docker/
-│   └── docker-compose.yaml # Docker compose hỗ trợ profile CPU và GPU
-├── scripts/
-│   ├── smoke.sh            # Script kiểm thử nhanh toàn bộ endpoints
-│   └── test_openai_client.py # Mẫu gọi qua thư viện openai chính thức
-├── tests/                  # Test suite với 55 unit tests (100% pass)
-├── Dockerfile              # Production multi-stage Dockerfile cho CPU (sử dụng uv)
-├── Dockerfile.gpu          # Production multi-stage Dockerfile cho CUDA GPU (sử dụng uv)
-├── pyproject.toml          # Định nghĩa gói Python và dependencies
-└── README.md
-```
+### OpenAI 100% Compatible
+
+- **`POST /v1/audio/speech`** — main TTS endpoint, accepts standard OpenAI parameters
+- **`GET /v1/models`** — model listing
+- **`GET /v1/voices` & `/v1/audio/voices`** — voice pack catalogue
+- Works out-of-the-box with `openai-python`, `openai-node`, Open WebUI, Dify, LangChain
+
+### 14 Vietnamese Voicepacks
+
+| Gender | Voices |
+|---|---|
+| **Female** | `diem_trinh`, `mai_linh`, `mai_loan`, `my_yen`, `ngoc_huyen`, `thuc_trinh` |
+| **Male** | `duc_an`, `duc_duy`, `hung_thinh`, `manh_dung`, `phat_tai`, `thanh_dat`, `tuan_ngoc` |
+| **Neutral** | `storyvert` (audiobook) |
+
+All 13 OpenAI voice aliases (`alloy`, `nova`, `onyx`, `echo`, `shimmer`, `fable`, `coral`, `ash`, `ballad`, `marin`, `sage`, `verse`, `cedar`) are automatically mapped to the closest Vietnamese voice.
+
+### Streaming
+
+Two streaming modes for different use cases:
+
+| Mode | Parameter | Use Case |
+|---|---|---|
+| **SSE Stream** | `stream_format=sse` | Open WebUI, LibreChat, Dify (Server-Sent Events) |
+| **Audio Stream** | `stream_format=audio` | Direct browser playback (chunked bytes) |
+
+### Production-Ready
+
+- **Shared Model Architecture** — Kokoro-82M backbone loaded once; voicepacks are lightweight vectors (~200KB) swapped at runtime
+- **Dynamic Crossfade** — 50ms linear crossfade at sentence boundaries eliminates clicks/pops
+- **Text Normalization** — Vietnamese-aware regex normalizer handles standalone letters ("Y" -> /i/), abbreviations, units
+- **Scheduler & Queue** — concurrency slot manager with configurable queue, backpressure, and timeout
+- **Health Probes** — `/health`, `/ready`, `/live` for Kubernetes and GPUStack
+- **Metrics** — `/metrics` endpoint with RTF (Real-Time Factor) and request counters
+
+### GPUStack Integration
+
+- Includes [`deploy/gpustack-backend.yaml`](deploy/gpustack-backend.yaml) and [`deploy/gpustack-backend-source.yaml`](deploy/gpustack-backend-source.yaml)
+- Auto-detection of HuggingFace repo IDs or local directory mounts
+- Support for `cuda` (NVIDIA GPU) and `cpu` profiles
+- Full compatibility with all GPUStack Audio Playground parameters
+
+### Web Studio (`/`)
+
+A modern dark-mode glassmorphic playground with:
+- Voice selector, speed/input controls
+- Real-time synthesis latency display
+- Built-in audio player
+- Sample sentences for quick testing
+- Advanced parameter panel (GPUStack-compatible)
 
 ---
 
-## 🚀 Hướng dẫn cài đặt & Khởi chạy
+## Prerequisites
 
-### 1. Khởi chạy cục bộ với Python
+- **Python** >= 3.10
+- **ffmpeg** — audio encoding
+- **espeak-ng** — English phonemization fallback
+- **NVIDIA GPU** (optional but recommended for production)
+
+Install system dependencies:
 
 ```bash
-# Cài đặt dependencies (yêu cầu Python >= 3.10)
+# macOS
+brew install ffmpeg espeak-ng
+
+# Ubuntu/Debian
+sudo apt-get install ffmpeg libsndfile1 espeak-ng espeak-ng-data
+```
+
+---
+
+## Quick Start
+
+### Local Installation
+
+```bash
+# Clone the repository
+git clone https://github.com/tanpham380/tts-kokoro.git
+cd tts-kokoro
+
+# Install dependencies
 pip install -e .
 
-# Đảm bảo hệ thống có ffmpeg và espeak-ng:
-# Trên macOS: brew install ffmpeg espeak-ng
-# Trên Ubuntu/Debian: apt-get install ffmpeg libsndfile1 espeak-ng espeak-ng-data
-
-# Khởi chạy server:
+# Start the server
 kokoro-vi-server --port 8880
 ```
 
-Truy cập Web Studio tại: `http://localhost:8880/`
+Open the Web Studio at: **http://localhost:8880/**
 
----
+### Docker & Docker Compose
 
-### 2. Khởi chạy bằng Docker & Docker Compose
-
-Dự án cung cấp 2 Dockerfile tối ưu hóa kích thước bằng **Astral uv**:
-
-#### Cách 1: Docker Compose
+#### Option 1: Docker Compose (Recommended)
 
 ```bash
-# Khởi chạy bản CPU (Port 8881)
+# CPU profile (port 8881)
 docker compose --profile cpu up -d
 
-# Khởi chạy bản NVIDIA GPU (Port 8882)
+# GPU profile (port 8882)
 docker compose --profile gpu up -d
 ```
 
-#### Cách 2: Docker Build thủ công
+#### Option 2: Manual Build
 
 ```bash
-# Build bản GPU CUDA
+# GPU (CUDA)
 docker build -f Dockerfile.gpu -t kokoro-vi-server:gpu .
-
-# Chạy bản GPU
 docker run -d --gpus all -p 8880:8880 \
   -v ~/.cache/huggingface:/cache/huggingface \
   -e DEVICE=cuda \
   kokoro-vi-server:gpu
+
+# CPU only
+docker build -f Dockerfile -t kokoro-vi-server:cpu .
+docker run -d -p 8880:8880 \
+  -e DEVICE=cpu \
+  kokoro-vi-server:cpu
 ```
 
 ---
 
-## 🧩 Tích hợp GPUStack
+## API Reference
 
-Dự án được thiết kế chuẩn xác để kết nối vào cụm GPUStack:
+### `POST /v1/audio/speech`
 
-1. **Import Backend vào GPUStack**:
-   - Truy cập giao diện quản trị GPUStack: **Inference Backends** -> Nhấn **Add Backend**.
-   - Chọn chế độ **YAML** và dán nội dung từ tệp [`deploy/gpustack-backend.yaml`](file:///Users/apple/Desktop/dev/tts-kokoro/deploy/gpustack-backend.yaml).
-   - Tên backend đăng ký là `Kokoro-TTS-Vietnamese-custom`.
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `model` | string | `Kokoro-Vietnamese` | Model name (must be registered) |
+| `input` | string | **required** | Text to synthesize |
+| `voice` | string | `diem_trinh` | Voice ID or OpenAI alias |
+| `speed` | float | `1.0` | Playback speed (0.5-2.0) |
+| `format` / `response_format` | string | `mp3` | Output format: `mp3`, `wav`, `opus`, `aac`, `flac`, `pcm` |
+| `stream_format` | string | — | `sse` for OpenAI streaming, `audio` for raw bytes |
+| `language` | string | `vi` | Language hint (`vi`, `en`, `auto`) |
 
-2. **Triển khai Model trong GPUStack**:
-   - Vào mục **Models** -> Nhấn **Deploy Model**.
-   - Chọn **Category**: `Audio` / `Text to Speech` (hoặc Custom).
-   - **Backend**: Chọn `Kokoro-TTS-Vietnamese-custom`.
-   - **Hugging Face Model**: `contextboxai/Kokoro-Vietnamese`.
-   - GPUStack sẽ tự động tải model về worker, gắn mount thư mục vào `{{model_path}}` và chạy lệnh:
-     ```bash
-     kokoro-vi-server --model-path {{model_path}} --served-model-name {{model_name}} --host {{worker_ip}} --port {{port}}
-     ```
-   - Server lập tức chuyển trạng thái `ready` (qua probe `/health` và `/ready`).
+### `GET /v1/models`
+
+Returns a list of available models in OpenAI format.
+
+### `GET /v1/voices` | `GET /v1/audio/voices`
+
+Returns metadata for all 14 voicepacks (ID, label, gender, style, language).
 
 ---
 
-## 💻 Mẫu gọi API chuẩn OpenAI
+## OpenAI Client Examples
 
-### 1. Gọi bằng cURL (REST API)
+### cURL
 
 ```bash
-# Tạo file MP3 tiếng Việt
 curl -X POST http://localhost:8880/v1/audio/speech \
   -H "Content-Type: application/json" \
   -d '{
     "model": "Kokoro-Vietnamese",
-    "input": "Xin chào! Đây là bài kiểm tra giọng nói tiếng Việt mượt mà với Kokoro.",
+    "input": "Xin chào! Đây là bài kiểm tra giọng nói tiếng Việt.",
     "voice": "diem_trinh",
     "response_format": "mp3",
     "speed": 1.0
   }' \
-  --output tieng_viet.mp3
+  --output output.mp3
 ```
 
-### 2. Sử dụng OpenAI Python SDK
+### Python (OpenAI SDK)
 
 ```python
 from openai import OpenAI
 
-# Trỏ base_url tới server Kokoro
 client = OpenAI(
     base_url="http://localhost:8880/v1",
     api_key="not-needed"
 )
 
+# Synchronous
 response = client.audio.speech.create(
     model="Kokoro-Vietnamese",
-    voice="mai_linh",  # Hoặc alias: "alloy", "nova", "onyx", v.v.
-    input="Hôm nay thời tiết Hà Nội và Sài Gòn đều rất đẹp, chúc bạn một ngày làm việc hiệu quả!",
+    voice="mai_linh",
+    input="Hôm nay thời tiết Hà Nội và Sài Gòn đều rất đẹp.",
     response_format="mp3",
     speed=1.05
 )
-
 response.stream_to_file("output.mp3")
-```
 
-### 3. Gọi Streaming trực tiếp (Giảm độ trễ phát âm)
-
-```python
-response = client.audio.speech.create(
+# Streaming
+with client.audio.speech.with_streaming_response.create(
     model="Kokoro-Vietnamese",
     voice="thanh_dat",
     input="Từng câu văn sẽ được chuyển thành âm thanh ngay khi mô hình xử lý xong.",
     response_format="wav",
     stream=True
-)
+) as response:
+    response.stream_to_file("stream_output.wav")
+```
 
-response.stream_to_file("stream_output.wav")
+### Node.js (OpenAI SDK)
+
+```javascript
+import OpenAI from 'openai';
+
+const client = new OpenAI({
+  baseURL: 'http://localhost:8880/v1',
+  apiKey: 'not-needed'
+});
+
+const response = await client.audio.speech.create({
+  model: 'Kokoro-Vietnamese',
+  input: 'Xin chào! Đây là bài kiểm tra TTS tiếng Việt.',
+  voice: 'diem_trinh',
+  response_format: 'mp3',
+  speed: 1.0
+});
+
+const buffer = Buffer.from(await response.arrayBuffer());
+// ...
 ```
 
 ---
 
-## 🎙️ Bảng đối chiếu Giọng đọc & OpenAI Aliases
+## Voices
 
-| Giọng Tiếng Việt | Tên hiển thị | Giới tính | Phong cách | OpenAI Alias |
+| Voice ID | Label | Gender | Style | OpenAI Alias |
 |---|---|---|---|---|
-| `diem_trinh` | Diễm Trinh | Nữ (Female) | Dẫn truyện (Narration) | `alloy` |
-| `mai_linh` | Mai Linh | Nữ (Female) | Tự nhiên, nhẹ nhàng | `coral` |
-| `mai_loan` | Mai Loan | Nữ (Female) | Truyền cảm | `nova` |
-| `my_yen` | Mỹ Yến | Nữ (Female) | Tươi sáng | `marin` |
-| `ngoc_huyen` | Ngọc Huyền | Nữ (Female) | Ấm áp | `sage` |
-| `thuc_trinh` | Thục Trinh | Nữ (Female) | Điềm tĩnh | `shimmer` |
-| `duc_an` | Đức An | Nam (Male) | Trầm ấm | `ash` |
-| `duc_duy` | Đức Duy | Nam (Male) | Tự nhiên, rõ ràng | `echo` |
-| `hung_thinh` | Hùng Thịnh | Nam (Male) | Dứt khoát | `verse` |
-| `manh_dung` | Mạnh Dũng | Nam (Male) | Đĩnh đạc | `onyx` |
-| `phat_tai` | Phát Tài | Nam (Male) | Năng động | - |
-| `thanh_dat` | Thành Đạt | Nam (Male) | Trẻ trung | `cedar` |
-| `tuan_ngoc` | Tuấn Ngọc | Nam (Male) | Trầm ấm | `ballad` |
-| `storyvert` | Storyvert | Trung tính (Neutral) | Sách nói (Audiobook) | `fable` |
+| `diem_trinh` | Diem Trinh | Female | Narration | `alloy` |
+| `mai_linh` | Mai Linh | Female | General | `coral` |
+| `mai_loan` | Mai Loan | Female | General | `nova` |
+| `my_yen` | My Yen | Female | General | `marin` |
+| `ngoc_huyen` | Ngoc Huyen | Female | General | `sage` |
+| `thuc_trinh` | Thuc Trinh | Female | General | `shimmer` |
+| `duc_an` | Duc An | Male | General | `ash` |
+| `duc_duy` | Duc Duy | Male | General | `echo` |
+| `hung_thinh` | Hung Thinh | Male | General | `verse` |
+| `manh_dung` | Manh Dung | Male | General | `onyx` |
+| `phat_tai` | Phat Tai | Male | General | — |
+| `thanh_dat` | Thanh Dat | Male | General | `cedar` |
+| `tuan_ngoc` | Tuan Ngoc | Male | General | `ballad` |
+| `storyvert` | Storyvert | Neutral | Audiobook | `fable` |
 
 ---
 
-## ⚙️ Các biến môi trường tùy chỉnh (Environment Variables)
+## Environment Variables
 
-| Biến | Mặc định | Mô tả |
+| Variable | Default | Description |
 |---|---|---|
-| `MODEL_PATH` | `contextboxai/Kokoro-Vietnamese` | HF repo id hoặc đường dẫn thư mục model cục bộ |
-| `SERVED_MODEL_NAME` | `Kokoro-Vietnamese` | Tên model công bố trên `/v1/models` |
-| `DEFAULT_VOICE` | `diem_trinh` | Giọng đọc mặc định khi client không chỉ định |
-| `DEVICE` | `auto` (hoặc `cuda`, `cpu`, `mps`) | Thiết bị phần cứng giải mã âm thanh |
-| `PRELOAD` | `true` | Nạp trước model vào RAM/VRAM khi khởi động container |
-| `WARMUP` | `true` | Chạy câu khởi động làm ấm kernel CUDA |
-| `MAX_CONCURRENCY` | `1` | Số lượt tổng hợp âm thanh thực thi song song |
-| `MAX_QUEUE` | `256` | Giới hạn hàng đợi trước khi trả về HTTP 503 |
-| `QUEUE_TIMEOUT` | `60` | Thời gian chờ tối đa trong hàng đợi (giây) |
-| `CROSSFADE_MS` | `50` | Thời gian nối âm giữa 2 câu (mili-giây) |
-| `PORT` | `8880` | Cổng HTTP lắng nghe |
-| `API_KEY` | `None` | Khóa xác thực Bearer token (nếu cần bảo mật) |
+| `MODEL_PATH` | `contextboxai/Kokoro-Vietnamese` | HuggingFace repo ID or local directory |
+| `SERVED_MODEL_NAME` | `Kokoro-Vietnamese` | Model name exposed on `/v1/models` |
+| `DEFAULT_VOICE` | `diem_trinh` | Default voice when client doesn't specify |
+| `DEVICE` | `auto` | Hardware device: `auto`, `cuda`, `cpu`, `mps` |
+| `PRELOAD` | `true` | Pre-load model at startup |
+| `WARMUP` | `true` | Warm up CUDA kernels at startup |
+| `MAX_CONCURRENCY` | `1` | Max parallel decodes |
+| `MAX_QUEUE` | `256` | Max queue size (return 503 when full) |
+| `QUEUE_TIMEOUT` | `60` | Max queue wait time (seconds) |
+| `CROSSFADE_MS` | `50` | Crossfade duration between sentences (ms) |
+| `SPEED` | `1.0` | Default synthesis speed |
+| `PORT` | `8880` | HTTP listen port |
+| `API_KEY` | `None` | Bearer token for API authentication |
+| `LOG_LEVEL` | `info` | Logging verbosity |
 
 ---
 
-## 🧪 Kiểm thử (Testing)
+## GPUStack Deployment
 
-Chạy bộ kiểm thử tự động với 55 bài test bao phủ các thành phần engine, âm thanh, cấu hình, voice mapping và FastAPI routes:
+### Step 1: Import Backend
+
+1. Open GPUStack Admin -> **Inference Backends** -> **Add Backend**
+2. Select **YAML** mode
+3. Paste the content of [`deploy/gpustack-backend.yaml`](deploy/gpustack-backend.yaml)
+4. Backend name: `Kokoro-TTS-Vietnamese-custom`
+
+### Step 2: Deploy Model
+
+1. Go to **Models** -> **Deploy Model**
+2. **Category**: `Audio / Text to Speech`
+3. **Backend**: Select `Kokoro-TTS-Vietnamese-custom`
+4. **Hugging Face Model**: `contextboxai/Kokoro-Vietnamese`
+
+GPUStack will:
+- Automatically download the model
+- Mount it to `{{model_path}}` inside the container
+- Launch `kokoro-vi-server` with GPUStack-injected parameters
+- Server transitions to `ready` state via `/health` and `/ready` probes
+
+---
+
+## Web Studio Playground
+
+The server includes a built-in web playground at `http://localhost:8880/` featuring:
+
+- Dark-mode glassmorphic UI
+- Voice selector with all 14 Vietnamese voices
+- Speed adjustment and text input
+- Real-time synthesis latency display
+- Integrated audio player
+- Sample sentences for quick testing
+- Advanced parameter panel compatible with GPUStack Playground
+
+---
+
+## Project Structure
+
+```
+tts-kokoro/
+├── app/
+│   ├── __init__.py         # Server version
+│   ├── audio.py            # PCM processing, encoding, crossfade, streaming
+│   ├── cli.py              # CLI entrypoint (GPUStack-compatible flags)
+│   ├── config.py           # Environment-driven Settings dataclass
+│   ├── engine.py           # VoiceRuntime, model lifecycle, synthesis pipeline
+│   ├── schemas.py          # Pydantic request/response schemas
+│   ├── server.py           # FastAPI routes and middleware
+│   ├── ui.py               # Web Studio HTML/CSS/JS
+│   └── voices.py           # Voice catalogue and OpenAI alias mapping
+├── deploy/
+│   ├── gpustack-backend.yaml          # GPUStack Custom Inference Backend
+│   └── gpustack-backend-source.yaml   # GPUStack InferenceBackendSource
+├── docker/
+│   └── docker-compose.yaml  # Docker Compose (CPU + GPU profiles)
+├── scripts/
+│   ├── smoke.sh             # Quick endpoint verification
+│   └── test_openai_client.py # OpenAI SDK test client
+├── tests/                   # Test suite (unit + integration)
+├── Dockerfile              # Production multi-stage (CPU)
+├── Dockerfile.gpu          # Production multi-stage (CUDA)
+├── pyproject.toml          # Package definition
+└── README.md
+```
+
+---
+
+## Architecture Overview
+
+```
+Client Request
+      |
+      v
++-----------------+
+|   FastAPI Server |  <- POST /v1/audio/speech
+|   (app/server.py)|
++--------+---------+
+         |
+    +----v-----+
+    |  Engine   |  <- Text normalization (vig2p)
+    |(app/engine|      Sentence splitting
+    |   .py)    |      Phonemization
+    +----+-----+
+         |
+    +----v-----+
+    | VoiceRT   |  <- Shared KModel backbone
+    | (app/engine|    Voicepack swap per request
+    |   .py)    |      Dynamic crossfade (50ms)
+    +----+-----+
+         |
+    +----v-----+
+    |  Audio    |  <- PCM -> encoding (mp3/opus/aac/wav/flac)
+    |(app/audio |      Streaming chunk emission
+    |   .py)    |
+    +----------+
+```
+
+### Key Design Decisions
+
+1. **Shared Model, Swappable Voicepacks** — The 82M-parameter backbone is loaded once. Each of the 14 voices is a ~200KB vector, swapped in microseconds.
+2. **Sentence Splitting with Crossfade** — Long input is split into sentences, decoded independently, and joined with a 50ms linear crossfade to eliminate clicks.
+3. **Vietnamese-Aware Normalization** — Before phonemization, standalone letters ("Y", "A", "O") are mapped to Vietnamese readings, abbreviations ("TP.HCM" -> "Thanh pho Ho Chi Minh") are expanded, and units are vocalized.
+4. **Concurrency Scheduling** — A slot manager controls parallel decodes, enforces queue limits, and returns HTTP 503 under overload.
+
+---
+
+## Testing
 
 ```bash
+# Run the full test suite
 python3 -m pytest tests/
+
+# Quick smoke test (requires running server)
+bash scripts/smoke.sh
 ```
+
+---
+
+## License
+
+Apache License 2.0 — see the [Apache 2.0 License](https://www.apache.org/licenses/LICENSE-2.0) for details.
+
+The underlying **Kokoro-Vietnamese** model weights are licensed by their respective authors. Please refer to the model card on [HuggingFace](https://huggingface.co/contextboxai/Kokoro-Vietnamese) for model-specific licensing terms.
+
+---
+
+## Acknowledgements
+
+- **[hexgrad](https://huggingface.co/hexgrad)** — original Kokoro-82M model
+- **[contextboxai](https://huggingface.co/contextboxai)** — Kokoro Vietnamese fine-tuning
+- **[iamdinhthuan](https://github.com/iamdinhthuan)** — G2P and `dinhthuan/kokoro-vi-ngoc-huyen` checkpoint
+- **[Kokoro-FastAPI](https://github.com/remsky/Kokoro-FastAPI)** — serving architecture reference
+- **[GPUStack](https://github.com/gpustack/gpustack)** — model serving platform
+- **[vig2p](https://github.com/vigotech/vig2p)** — Vietnamese G2P library
