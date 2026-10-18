@@ -75,33 +75,57 @@ class VoiceError(ValueError):
 def _normalise(name: str) -> str:
     return name.strip().lower().replace("-", "_").replace(" ", "_")
 
+def _clean(s: str) -> str:
+    import re
+    return re.sub(r"[^a-z0-9]", "", s.lower())
+
 def resolve(name: str | None, default: str) -> str:
     """Map a client-supplied voice name onto a canonical voicepack id.
 
-    Accepts a canonical id, an OpenAI alias, a language-prefixed id, or a label
+    Accepts a canonical id, an OpenAI alias, language/gender prefixes
+    (e.g. ``vi-vn-female-ngochuyen``, ``vi_ngoc_huyen``), or a label
     such as ``"Diễm Trinh"``. Raises :class:`VoiceError` when nothing matches.
     """
     candidate = _normalise(name) if name else ""
     if not candidate:
         return default
 
+    # Direct match on canonical id or OpenAI alias
     if candidate in VOICE_BY_ID:
         return candidate
     if candidate in OPENAI_VOICE_ALIASES:
         return OPENAI_VOICE_ALIASES[candidate]
 
-    for prefix in _LANGUAGE_PREFIXES:
-        if candidate.startswith(f"{prefix}_"):
-            stripped = candidate[len(prefix) + 1 :]
-            if stripped in VOICE_BY_ID:
-                return stripped
-            if stripped in OPENAI_VOICE_ALIASES:
-                return OPENAI_VOICE_ALIASES[stripped]
-            break
-
+    # Check direct match with label
     for voice in VOICES:
         if _normalise(voice.label) == candidate:
             return voice.id
+
+    # Strip composite prefixes like vi_vn_, vn_, vi_, female_, male_
+    prefixes = ("vi_vn_female_", "vi_vn_male_", "vi_vn_", "vn_female_", "vn_male_", "vn_", "vi_female_", "vi_male_", "vi_", "v_", "female_", "male_")
+    stripped = candidate
+    for p in prefixes:
+        if stripped.startswith(p):
+            stripped = stripped[len(p):]
+            break
+
+    if stripped in VOICE_BY_ID:
+        return stripped
+    if stripped in OPENAI_VOICE_ALIASES:
+        return OPENAI_VOICE_ALIASES[stripped]
+    for voice in VOICES:
+        if _normalise(voice.label) == stripped:
+            return voice.id
+
+    # Try matching without any separators (e.g. ngochuyen == ngoc_huyen)
+    clean_target = _clean(candidate)
+    for v_id in VOICE_IDS:
+        clean_id = _clean(v_id)
+        if clean_target.endswith(clean_id) or clean_target == clean_id:
+            return v_id
+    for alias, v_id in OPENAI_VOICE_ALIASES.items():
+        if clean_target.endswith(alias) or clean_target == alias:
+            return v_id
 
     raise VoiceError(
         f"unknown voice {name!r}; known voices: {', '.join(VOICE_IDS)}"

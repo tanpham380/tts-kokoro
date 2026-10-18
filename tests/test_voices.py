@@ -94,10 +94,14 @@ def test_resolve_defaults_none():
 
 
 
+def test_resolve_flexible_prefixes():
+    assert resolve("vi-vn-female-ngochuyen", "diem_trinh") == "ngoc_huyen"
+    assert resolve("ngochuyen", "diem_trinh") == "ngoc_huyen"
+    assert resolve("vi_ngoc_huyen", "diem_trinh") == "ngoc_huyen"
+    assert resolve("female-thuctrinh", "diem_trinh") == "thuc_trinh"
+
 def test_resolve_unknown_raises():
-
     with pytest.raises(VoiceError):
-
         resolve("not_a_voice", "diem_trinh")
 
 
