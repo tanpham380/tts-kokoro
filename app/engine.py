@@ -187,7 +187,14 @@ def convert_numbers_to_vietnamese_words(text: str) -> str:
         except Exception:
             return m.group(0)
 
-    text = re.sub(r"\b([0-3]?\d)[/-]([01]?\d)[/-](\d{4})\b", _date_sub, text)
+    # Consume an immediately preceding "ngày " so "ngày 20/10/2026" does not
+    # become "ngày ngày 20 tháng 10 ..."; the replacement re-adds it once.
+    text = re.sub(
+        r"(?:\bngày\s+)?\b([0-3]?\d)[/-]([01]?\d)[/-](\d{4})\b",
+        _date_sub,
+        text,
+        flags=re.IGNORECASE,
+    )
 
     # 2. Decimals: 3.14 or 3,14
     def _dec_sub(m: re.Match) -> str:
