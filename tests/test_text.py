@@ -169,9 +169,9 @@ def test_percent_range_beats_bare_percent() -> None:
 
 def test_units() -> None:
     assert convert_units("15km") == "mười lăm ki lô mét"
-    assert convert_units("10km/h") == "mười ki lô mét một giờ"
+    assert convert_units("10km/h") == "mười ki lô mét trên giờ"
     assert convert_units("3kg") == "ba ki lô gam"
-    assert convert_units("5cm") == "năm xen ti mét"
+    assert convert_units("5cm") == "năm xăng ti mét"
 
 def test_k_suffix() -> None:
     assert convert_units("100k") == "một trăm nghìn"
@@ -191,7 +191,7 @@ def test_k_suffix() -> None:
         ("3-5%", "ba đến năm phần trăm"),
         ("1000001", "một triệu không trăm lẻ một"),
         ("thứ 4", "thứ tư"),
-        ("10km/h", "mười ki lô mét một giờ"),
+        ("10km/h", "mười ki lô mét trên giờ"),
         ("VND 100", "một trăm đồng"),
         ("01/05/2001", "ngày mùng một tháng năm năm hai nghìn không trăm lẻ một"),
         ("3.14", "ba phẩy mười bốn"),
@@ -250,17 +250,6 @@ def test_case_is_preserved() -> None:
 
 def test_acronym_with_number() -> None:
     assert normalize("COVID-19") == "COVID mười chín"
-
-def test_nemo_stage_is_optional() -> None:
-    """The suite must pass with or without pynini installed."""
-    from app.text import nemo
-
-    if nemo.is_available():
-        assert nemo.unavailable_reason() is None
-    else:
-        assert nemo.unavailable_reason() is not None
-        # The fallback must be a no-op, not an exception.
-        assert nemo.normalize("1.234") == "1.234"
 
 def test_non_vietnamese_language_skips_expansion() -> None:
     assert normalize("1.234.567", language="en") == "1.234.567"

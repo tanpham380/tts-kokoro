@@ -1,0 +1,67 @@
+Vietnamese text normalization tables
+====================================
+
+The TSV files under `data/` are copied verbatim from
+**NVIDIA NeMo-text-processing**, Vietnamese text-normalization grammar:
+
+    https://github.com/NVIDIA/NeMo-text-processing
+    nemo_text_processing/text_normalization/vi/data/
+
+    Copyright (c) 2025, NVIDIA CORPORATION & AFFILIATES.
+    Licensed under the Apache License, Version 2.0.
+
+A copy of the license is at:
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software distributed
+under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR
+CONDITIONS OF ANY KIND, either express or implied. See the License for the
+specific language governing permissions and limitations under the License.
+
+What was copied
+---------------
+
+Only the **data tables** (25 TSV files, ~4 KB). No Python source was copied.
+
+The grammar's Python code was not copied because it is 1368 lines, of which
+only 291 are pynini/FST; the remainder reads these same TSVs into dicts, which
+`app/text/data.py` does in ~200 lines of standard-library Python. NeMo uses
+finite-state transducers to emit *every* valid reading of an ambiguous input
+(for audio-based normalization); a TTS frontend needs exactly one reading, so
+the FST machinery and its 147 MB `pynini` dependency buy nothing here.
+
+Modifications
+-------------
+
+None. The files are byte-identical to upstream. `app/text/data.py` reads them
+directly; no table has been edited or extended.
+
+Files
+-----
+
+    date/days.tsv                       1..31 as words
+    date/months.tsv                     1..12 as words (4 is "tư")
+    date/year_suffix.tsv                tcn / scn
+    fraction/denominator_exceptions.tsv 4 -> "tư"
+    measure/base_units.tsv              m, m2, g, l, s, v, w, hz, ...
+    measure/measurements_minimal.tsv    °C, %, ha, kwh, mbps, ...
+    measure/prefixes.tsv                SI prefixes
+    money/currency.tsv                  currency symbols and codes
+    money/currency_minor.tsv            minor units (xu, penny)
+    money/per_unit_bases.tsv            rate denominators
+    money/per_unit_non_metric.tsv       /giờ, /ngày, /người, ...
+    money/per_unit_prefixes.tsv         SI prefixes in a rate
+    numbers/digit.tsv                   1..9
+    numbers/digit_special.tsv           1/4/5 with their "mươi" forms
+    numbers/magnitudes.tsv              nghìn, triệu, tỷ, trăm, linh
+    numbers/quantity_abbr.tsv           k, tr, t
+    numbers/teen.tsv                    10..19
+    numbers/ties.tsv                    20..90
+    numbers/zero.tsv                    0
+    ordinal/ordinal_exceptions.tsv      1 -> "nhất", 4 -> "tư"
+    roman/key_word.tsv                  words that introduce a roman numeral
+    roman/roman_numerals.tsv            I, V, X, L, C, D, M and subtractives
+    time/time_units.tsv                 h, g, p, s
+    time/time_zones.tsv                 GMT, UTC, ...
+    whitelist.tsv                       (empty upstream)

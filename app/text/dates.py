@@ -1,14 +1,21 @@
 """Vietnamese dates, times and numeric ranges.
 
-Each pattern is anchored so it cannot swallow a neighbouring number, and the
-replacement re-adds the words it consumed (``ngày``, ``tháng``, ``năm``) so a
-caller that already wrote ``ngày 20/10`` does not end up with ``ngày ngày``.
+Month and day words come from ``data/date/*.tsv`` (see ``data/NOTICE``), so a
+different reading for month 4 (``tư``) is a data edit. The *rules* are here:
+
+* Each pattern is anchored so it cannot swallow a neighbouring number.
+* The replacement re-adds the words it consumed (``ngày``, ``tháng``, ``năm``)
+  so a caller that already wrote ``ngày 20/10`` does not end up with
+  ``ngày ngày``.
+* A range (``2024-2025``) is matched before the bare integer pass, or the
+  hyphen survives and the two years are read as separate numbers.
 """
 
 from __future__ import annotations
 
 import re
 
+from . import data
 from .numbers import int_to_words, ordinal_to_words
 
 #: ``ngày 20/10/2026``, ``20-10-2026``. The optional leading ``ngày`` is
@@ -31,15 +38,20 @@ _NUMBER_RANGE = re.compile(r"\b(\d{1,3})\s*[-–—]\s*(\d{1,3})\b")  # noqa: RU
 _WEEKDAY = re.compile(r"\bthứ\s+([1-7])\b", re.IGNORECASE)
 
 def _day_word(day: int) -> str:
-    """``1`` -> ``mùng một``; other days use the cardinal."""
-    return f"mùng {int_to_words(day)}" if 1 <= day <= 9 else int_to_words(day)
+    """``1`` -> ``mùng một``; other days use the table."""
+    word = data.days().get(str(day), int_to_words(day))
+    return f"mùng {word}" if 1 <= day <= 9 else word
+
+def _month_word(month: int) -> str:
+    """Month 4 is ``tư``, not ``bốn`` — see ``date/months.tsv``."""
+    return data.months().get(str(month), int_to_words(month))
 
 def _full_date(m: re.Match[str]) -> str:
     day, month, year = int(m.group(1)), int(m.group(2)), int(m.group(3))
     if not (1 <= day <= 31 and 1 <= month <= 12):
         return m.group(0)
     return (
-        f"ngày {_day_word(day)} tháng {int_to_words(month)} "
+        f"ngày {_day_word(day)} tháng {_month_word(month)} "
         f"năm {int_to_words(year)}"
     )
 
@@ -47,7 +59,7 @@ def _short_date(m: re.Match[str]) -> str:
     day, month = int(m.group(1)), int(m.group(2))
     if not (1 <= day <= 31 and 1 <= month <= 12):
         return m.group(0)
-    return f"ngày {_day_word(day)} tháng {int_to_words(month)}"
+    return f"ngày {_day_word(day)} tháng {_month_word(month)}"
 
 def _time(m: re.Match[str]) -> str:
     hour, minute = int(m.group(1)), int(m.group(2))

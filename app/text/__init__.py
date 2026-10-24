@@ -8,20 +8,27 @@ pipeline is ordered, and the order is load-bearing:
    not read as a time.
 3. Dates — dates, times, weekdays, ranges. Before numbers so ``2024-2025`` is
    a range and not two numbers joined by a hyphen.
-4. Numbers — grouped thousands, decimals, bare integers.
-5. Standalone letters — after numbers, so ``B`` in ``nhóm máu A và B`` is
+4. Acronym + digits — before numbers, so ``COVID-19`` still has digits for the
+   pattern to match.
+5. Numbers — grouped thousands, decimals, bare integers.
+6. Standalone letters — after numbers, so ``B`` in ``nhóm máu A và B`` is
    still a letter.
-6. NeMo TN — optional second stage for what the regex passes do not cover
-   (fractions, roman numerals, ordinals, measure). Skipped when ``pynini`` is
-   not installed, which is the case on Windows.
 
 Reordering any of these silently breaks cases that currently pass. See
 ``.agents/rules/text-normalization.md`` for the measured defect table.
 
 There is deliberately **no abbreviation dictionary**. Vietnamese abbreviations
 are an open set, so a hand-maintained table is always incomplete and always
-needs a rebuild to extend. The two things that are closed sets — the Latin
-alphabet and the number/date/unit grammar — are handled by rule instead.
+needs a rebuild to extend. Only closed sets are handled, and by rule: the Latin
+alphabet (``letters.py``) and the number/date/unit grammar.
+
+The word tables in ``data/`` are copied from NVIDIA NeMo-text-processing
+(Apache-2.0 — see ``data/NOTICE``). Only the **data** was copied, not the
+grammar's Python: NeMo's code is 1368 lines of which 291 are pynini/FST, and
+the rest reads these same TSVs into dicts, which ``data.py`` does in ~200 lines
+of standard-library Python. NeMo needs finite-state transducers to emit *every*
+valid reading of an ambiguous input; a TTS frontend needs exactly one, so the
+FST machinery and its 147 MB ``pynini`` dependency buy nothing here.
 """
 
 from __future__ import annotations
@@ -29,7 +36,7 @@ from __future__ import annotations
 import re
 import unicodedata
 
-from . import nemo
+from . import data
 from .dates import convert_dates
 from .letters import (
     LETTER_NAMES,
@@ -52,10 +59,10 @@ __all__ = [
     "convert_dates",
     "convert_numbers",
     "convert_units",
+    "data",
     "digits_to_words",
     "fix_standalone_letters",
     "int_to_words",
-    "nemo",
     "normalize",
     "ordinal_to_words",
     "read_number_token",
@@ -86,5 +93,4 @@ def normalize(text: str, language: str | None = "vi") -> str:
     text = split_acronym_numbers(text)
     text = convert_numbers(text)
     text = fix_standalone_letters(text)
-    text = nemo.normalize(text)
     return re.sub(r"[ \t]+", " ", text).strip()

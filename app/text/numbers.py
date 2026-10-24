@@ -1,11 +1,12 @@
 """Vietnamese cardinal, ordinal and decimal numbers.
 
-The rules encoded here are the ones a Vietnamese reader applies without
-thinking, and the ones the previous single-function implementation got wrong:
+The word tables come from ``data/numbers/*.tsv`` (see ``data/NOTICE``), so a
+new magnitude or a different reading for ``4`` is a data edit, not a code edit.
+The *rules* that combine them are here:
 
 * ``.`` groups thousands and ``,`` marks the decimal point. ``1.234.567`` is
-  one million two hundred thirty-four thousand five hundred sixty-seven, not
-  a decimal. A dot followed by exactly three digits is a group separator.
+  one million two hundred thirty-four thousand five hundred sixty-seven, not a
+  decimal. A dot followed by exactly three digits is a group separator.
 * A non-leading group below one hundred keeps its filler words, so
   ``1000001`` is ``một triệu không trăm lẻ một`` and not ``một triệu một``.
 * ``mốt``/``tư``/``lăm`` replace ``một``/``bốn``/``năm`` after ``mươi``.
@@ -18,16 +19,31 @@ from __future__ import annotations
 
 import re
 
-#: Digits 0-9 as words.
-UNITS: tuple[str, ...] = (
-    "không", "một", "hai", "ba", "bốn", "năm", "sáu", "bảy", "tám", "chín",
+from . import data
+
+#: Digits 0-9 as words, in order. Kept as a tuple because callers index it.
+UNITS: tuple[str, ...] = (data.zero(),) + tuple(
+    data.digits()[str(d)] for d in range(1, 10)
 )
 
 #: Scale words for each group of three digits, least significant first.
-_SCALES: tuple[str, ...] = ("", "nghìn", "triệu", "tỷ", "nghìn tỷ", "triệu tỷ")
+#: ``magnitudes.tsv`` names them in English; this is the order they apply in.
+_SCALE_KEYS: tuple[str, ...] = (
+    "",
+    "thousand",
+    "million",
+    "billion",
+    "trillion",
+    "quadrillion",
+)
 
-#: Ordinals that are irregular; everything else uses the cardinal.
-_ORDINALS: dict[int, str] = {1: "nhất", 2: "hai", 4: "tư"}
+#: The filler word between a hundreds group and a unit below ten.
+#:
+#: ``magnitudes.tsv`` says ``linh``, which is the southern variant. This project
+#: reads ``lẻ``, the northern one, and the tests pin it. The table is left
+#: byte-identical to upstream (see ``data/NOTICE``), so the preference lives
+#: here rather than as an edit to the data.
+_FILLER = "lẻ"
 
 #: ``1.234`` / ``1.234.567`` — a dot followed by exactly three digits.
 _THOUSANDS_DOT = re.compile(r"(?<![\d.,])\d{1,3}(?:\.\d{3})+(?![\d.,])")
@@ -40,26 +56,26 @@ _DECIMAL_DOT = re.compile(r"(?<![\d.,])(\d+)\.(\d+)(?![\d.,])")
 #: A bare integer.
 _INTEGER = re.compile(r"(?<![\d.,])\d+(?![\d.,])")
 
+def _scales() -> tuple[str, ...]:
+    """Scale words in ascending order, from ``magnitudes.tsv``."""
+    magnitudes = data.magnitudes()
+    return tuple(magnitudes.get(key, "") for key in _SCALE_KEYS)
+
 def _read_tens(n: int) -> str:
     """Read 10..99. ``n`` must already be in range."""
     if n < 10:
         return UNITS[n]
-    if n == 10:
-        return "mười"
-    if n < 20:
-        return "mười lăm" if n == 15 else "mười " + UNITS[n % 10]
+    teens = data.teens()
+    if str(n) in teens:
+        return teens[str(n)]
 
     tens, unit = divmod(n, 10)
-    head = UNITS[tens] + " mươi"
+    head = data.ties()[str(tens)]
     if unit == 0:
         return head
-    if unit == 1:
-        return head + " mốt"
-    if unit == 4:
-        return head + " tư"
-    if unit == 5:
-        return head + " lăm"
-    return head + " " + UNITS[unit]
+    # 1/4/5 have a different form after "mươi": mốt, tư, lăm.
+    special = data.special_digits().get(str(unit))
+    return f"{head} {special[1] if special else UNITS[unit]}"
 
 def _read_group(n: int, *, full: bool) -> str:
     """Read 0..999.
@@ -68,15 +84,19 @@ def _read_group(n: int, *, full: bool) -> str:
     group that is not the leading one, which is what keeps
     ``1000001`` -> ``một triệu không trăm lẻ một``.
     """
+    magnitudes = data.magnitudes()
+    hundred = magnitudes.get("hundred", "trăm")
+    filler = _FILLER
+
     hundreds, rest = divmod(n, 100)
     parts: list[str] = []
     if hundreds or full:
-        parts.append(UNITS[hundreds] + " trăm")
+        parts.append(f"{UNITS[hundreds]} {hundred}")
     if rest == 0:
         return " ".join(parts)
     if rest < 10:
         if hundreds or full:
-            parts.append("lẻ")
+            parts.append(filler)
         parts.append(UNITS[rest])
         return " ".join(parts)
     parts.append(_read_tens(rest))
@@ -85,12 +105,13 @@ def _read_group(n: int, *, full: bool) -> str:
 def int_to_words(n: int) -> str:
     """Read an integer as natural Vietnamese words.
 
-    Handles negatives and anything up to ``triệu tỷ`` (10^18). Groups of three
-    digits are read most-significant first; a zero group is skipped but forces
-    the filler words on the next non-zero group.
+    Handles negatives and anything up to the largest magnitude in
+    ``magnitudes.tsv``. Groups of three digits are read most-significant first;
+    a zero group is skipped but forces the filler words on the next non-zero
+    group.
     """
     if n == 0:
-        return UNITS[0]
+        return data.zero()
     if n < 0:
         return "âm " + int_to_words(-n)
 
@@ -99,12 +120,13 @@ def int_to_words(n: int) -> str:
         n, group = divmod(n, 1000)
         groups.append(group)
 
+    scales = _scales()
     parts: list[str] = []
     for index in range(len(groups) - 1, -1, -1):
         group = groups[index]
         if group == 0:
             continue
-        scale = _SCALES[index] if index < len(_SCALES) else ""
+        scale = scales[index] if index < len(scales) else ""
         # Only the leading group may drop its hundreds and the "lẻ" filler.
         full = index != len(groups) - 1
         words = _read_group(group, full=full)
@@ -117,7 +139,7 @@ def digits_to_words(s: str) -> str:
 
 def ordinal_to_words(n: int) -> str:
     """Read an ordinal (``4`` -> ``tư``, for ``thứ tư``)."""
-    return _ORDINALS.get(n, int_to_words(n))
+    return data.ordinal_exceptions().get(str(n), int_to_words(n))
 
 def _read_decimal(whole: str, fraction: str) -> str:
     """Read ``whole.fraction`` as ``... phẩy ...``.
