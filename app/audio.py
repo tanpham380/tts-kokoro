@@ -110,8 +110,7 @@ def _encode_with_ffmpeg(
         finished = subprocess.run(
             command,
             input=to_pcm16le(samples),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
             timeout=timeout,
             check=False,
         )

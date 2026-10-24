@@ -22,9 +22,7 @@ import re
 from . import data
 
 #: Digits 0-9 as words, in order. Kept as a tuple because callers index it.
-UNITS: tuple[str, ...] = (data.zero(),) + tuple(
-    data.digits()[str(d)] for d in range(1, 10)
-)
+UNITS: tuple[str, ...] = (data.zero(), *tuple(data.digits()[str(d)] for d in range(1, 10)))
 
 #: Scale words for each group of three digits, least significant first.
 #: ``magnitudes.tsv`` names them in English; this is the order they apply in.

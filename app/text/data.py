@@ -22,7 +22,7 @@ Blank lines and ``#`` comments are skipped.
 
 from __future__ import annotations
 
-from functools import lru_cache
+from functools import cache, lru_cache
 from pathlib import Path
 
 #: Directory holding the TSV tables.
@@ -43,7 +43,7 @@ def _read_rows(relative: str) -> list[list[str]]:
             rows.append(columns)
     return rows
 
-@lru_cache(maxsize=None)
+@cache
 def load_pairs(relative: str) -> dict[str, str]:
     """Read a two-column TSV into a ``{key: value}`` dict.
 
@@ -52,7 +52,7 @@ def load_pairs(relative: str) -> dict[str, str]:
     """
     return {row[0]: row[1] for row in _read_rows(relative)}
 
-@lru_cache(maxsize=None)
+@cache
 def load_triples(relative: str) -> dict[str, tuple[str, str]]:
     """Read a three-column TSV into ``{key: (standard, alternative)}``.
 
@@ -61,7 +61,7 @@ def load_triples(relative: str) -> dict[str, tuple[str, str]]:
     """
     return {row[0]: (row[1], row[2]) for row in _read_rows(relative) if len(row) >= 3}
 
-@lru_cache(maxsize=None)
+@cache
 def load_keys(relative: str) -> tuple[str, ...]:
     """Read only the first column, preserving file order."""
     return tuple(row[0] for row in _read_rows(relative))

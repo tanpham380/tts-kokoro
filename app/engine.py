@@ -21,6 +21,7 @@ with a scripted fake and must run without the model stack installed.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import threading
 import time
@@ -266,11 +267,9 @@ class TTSEngine:
         return thread
 
     def _load_quietly(self) -> None:
-        try:
+        # Already recorded in _load_error; reported by /health and /ready.
+        with contextlib.suppress(EngineError):
             self.load()
-        except EngineError:
-            # Already recorded in _load_error; reported by /health and /ready.
-            pass
 
     def _build_runtime(self, voice: str) -> VoiceRuntime:
         """Build the model, or just a voicepack when the model already exists."""
