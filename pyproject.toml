@@ -33,8 +33,13 @@ tts-kokoro = "app.cli:main"
 Model = "https://huggingface.co/contextboxai/Kokoro-Vietnamese"
 Upstream = "https://github.com/iamdinhthuan/Kokoro-Vietnamese"
 
-[tool.setuptools]
-packages = ["app"]
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.setuptools.package-data]
+# The Vietnamese word tables are data, not code, so they must ship with the
+# package. Without this the wheel installs and then fails at the first number.
+"app.text" = ["data/*.tsv", "data/*/*.tsv", "data/NOTICE"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
