@@ -30,7 +30,8 @@ import json
 import logging
 import os
 import time
-from collections.abc import AsyncIterator, Generator
+import uuid
+from collections.abc import AsyncIterator, Callable, Generator
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -51,6 +52,7 @@ from .audio import (
     stream_prefix,
     streaming_mime,
 )
+from .cache import CacheKey
 from .config import DEFAULT_RESPONSE_FORMAT, Settings
 from .engine import TTSEngine
 from .schemas import APIError, HealthResponse, ModelCard, ModelList, SpeechRequest, VoiceList, VoiceCard
@@ -93,14 +95,21 @@ engine = TTSEngine(settings)
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     """Load the model in the background when ``PRELOAD=true`` so the app starts
-    immediately but is ready shortly after."""
+    immediately but is ready shortly after.
+
+    On shutdown the engine is marked draining so in-flight requests finish and
+    new ones get a 503 instead of a connection reset.
+    """
     if settings.preload:
         thread = engine.load_in_background()
         # Give the thread a tiny head-start so /ready reports "loading" instead
         # of falling through to a synchronous first-request load.
         thread.join(timeout=0.2)
-    yield
-
+    try:
+        yield
+    finally:
+        engine.begin_shutdown()
+        logger.info("shutdown: draining in-flight synthesis requests")
 
 app = FastAPI(
     title="Kokoro-Vietnamese TTS Server",
@@ -120,6 +129,20 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.middleware("http")
+async def _request_id(request: Request, call_next: Callable[[Request], Any]) -> Response:
+    """Attach a request id to every response and to the log record.
+
+    A client-supplied ``X-Request-ID`` is honoured so a trace survives a proxy
+    hop; otherwise one is generated. The id is echoed back so a caller can quote
+    it in a bug report.
+    """
+    request_id = request.headers.get("X-Request-ID") or uuid.uuid4().hex[:16]
+    request.state.request_id = request_id
+    response = await call_next(request)
+    response.headers["X-Request-ID"] = request_id
+    return response
 
 # --------------------------------------------------------------------------- #
 # error handling
@@ -270,6 +293,14 @@ async def metrics() -> dict[str, Any]:
     base = {**engine.metrics(), **engine.info()}
     return base
 
+@app.get("/metrics/prometheus", include_in_schema=False)
+async def metrics_prometheus() -> Response:
+    """Prometheus text exposition. Scrape this, not ``/metrics``."""
+    return Response(
+        content=engine.prometheus(),
+        media_type="text/plain; version=0.0.4; charset=utf-8",
+    )
+
 
 # --------------------------------------------------------------------------- #
 # routes: OpenAI-compatible
@@ -296,6 +327,7 @@ async def list_voices(
 
 @app.post("/v1/audio/speech")
 async def create_speech(
+    request: Request,
     req: SpeechRequest,
     _auth: None = Depends(require_api_key),
 ) -> Response:
@@ -326,6 +358,7 @@ async def create_speech(
     """
     _check_model(req.model)
     req.check_limits(settings)
+    request_id = getattr(request.state, "request_id", "-")
 
     if not engine.is_loaded:
         if engine._load_error:
@@ -426,6 +459,24 @@ async def create_speech(
             )
 
     # ------------------------------------------------------------ batch path
+    # Only the batch path is cached: a streaming response is consumed as it is
+    # produced, so there is nothing to store until the last chunk arrives.
+    cache_key = CacheKey(
+        text=req.input,
+        voice=req.voice or "",
+        speed=req.speed,
+        fmt=req.response_format,
+        sample_rate=engine.sample_rate,
+    )
+    cached = engine.cache_get(cache_key)
+    if cached is not None:
+        logger.info("cache hit | %d bytes | request_id=%s", len(cached), request_id)
+        return Response(
+            content=cached,
+            media_type=streaming_mime(req.response_format),
+            headers={"X-Cache": "HIT"},
+        )
+
     def _synth() -> bytes:
         audio = engine.synthesize(
             req.input,
@@ -445,14 +496,16 @@ async def create_speech(
     except APIError:
         raise
     except Exception as exc:
-        logger.exception("synthesis failed")
+        logger.exception("synthesis failed | request_id=%s", request_id)
         raise APIError(
             f"synthesis failed: {exc}", status_code=500
         ) from exc
 
+    engine.cache_put(cache_key, audio_bytes)
     return Response(
         content=audio_bytes,
         media_type=streaming_mime(req.response_format),
+        headers={"X-Cache": "MISS"},
     )
 
 

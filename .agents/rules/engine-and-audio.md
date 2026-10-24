@@ -1,7 +1,7 @@
 ---
 trigger: glob
-globs: "app/engine.py, app/audio.py"
-description: "Synthesis engine, voice runtime, phoneme fitting, scheduler, crossfade and audio encoding rules."
+globs: "app/engine.py, app/audio.py, app/cache.py"
+description: "Synthesis engine, voice runtime, phoneme fitting, scheduler, timeout, audio cache, crossfade and audio encoding rules."
 ---
 
 # Engine & Audio Rules
@@ -17,6 +17,29 @@ description: "Synthesis engine, voice runtime, phoneme fitting, scheduler, cross
   handler concurrently. Preserve the double-checked `is_loaded` pattern.
 - `_detect_device()` falls back `cuda → mps → cpu`. A pinned `cuda` on a host
   without CUDA logs a warning and returns `cpu` rather than raising.
+
+## Scheduler, timeout and draining
+
+- `_slots` is a `BoundedSemaphore(max_concurrency)`. `_acquire()` / `_release()`
+  wrap the whole generator in a `try/finally`; `_release` must run even when the
+  client disconnects mid-stream.
+- `max_queue=0` means "no queueing": a taken slot returns 503 immediately.
+- `synthesis_timeout` is a **deadline on the whole request**, checked between
+  chunks. It exists because `max_text_chars` bounds the input but not the decode
+  time — without it one long input holds the only GPU slot indefinitely.
+- `begin_shutdown()` sets `_draining`; `_require_loaded()` then refuses new work
+  with `server_shutting_down`. In-flight requests are left to finish.
+
+## Audio cache
+
+- `AudioCache` is bounded on **both** entry count and total bytes. An entry cap
+  alone lets a few long inputs blow the memory budget.
+- `CacheKey` must include everything that changes the bytes: text, voice, speed,
+  format, sample rate. Omitting any of them serves the wrong audio.
+- Only the **batch** path is cached. A streaming response is consumed as it is
+  produced, so there is nothing to store until the last chunk arrives.
+- The cache is process-local. A multi-worker deployment would need Redis; the
+  hit rate does not justify that for a single-GPU server.
 
 ## Phoneme budget
 
@@ -39,8 +62,6 @@ loop. Consequences:
 - `synthesize()` is `concat(list(stream(...)))` plus the optional peak limiter.
   The limiter **cannot** run on the streaming path because the peak is not
   known until the end — do not try to add it there.
-- `_acquire()` / `_release()` wrap the whole generator in a `try/finally`.
-  `_release` must run even when the client disconnects mid-stream.
 
 ## Audio encoding
 
@@ -53,6 +74,14 @@ loop. Consequences:
 - `crossfade()` is a linear fade over `fade_samples`. `crossfade_ms=0` means
   concatenate with an audible seam — that is a supported configuration, not a
   bug.
+
+## Metrics
+
+- `metrics()` returns JSON for humans and the Web Studio.
+- `prometheus()` returns the scrapeable text exposition. Keep both in step: a
+  counter added to one must be added to the other.
+- Only counters and gauges are exposed. A latency histogram would need
+  per-request buckets, which the engine does not keep.
 
 ## Style
 

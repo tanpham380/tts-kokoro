@@ -303,10 +303,9 @@ def test_normalize_vietnamese_text_issue_4_fixes():
     assert normalize_vietnamese_text("yêu quý ngày mai") == "yêu quý ngày mai"
 
 
-def test_normalize_vietnamese_abbreviations():
+def test_normalize_vietnamese_units_and_percent():
     from app.engine import normalize_vietnamese_text
 
-    assert "Thành phố Hồ Chí Minh" in normalize_vietnamese_text("TP.HCM đẹp lắm")
     assert "phần trăm" in normalize_vietnamese_text("tăng trưởng 100%")
     assert "ki lô mét" in normalize_vietnamese_text("khoảng cách 15km")
 

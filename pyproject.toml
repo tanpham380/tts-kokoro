@@ -24,6 +24,11 @@ dependencies = [
 
 [project.optional-dependencies]
 test = ["pytest>=8", "httpx>=0.27", "pytest-asyncio>=0.23"]
+# NeMo's Vietnamese TN grammar: fractions, roman numerals, ordinals, measure.
+# pynini ships manylinux-only wheels, so this extra is Linux-only by nature —
+# the Docker images install it, a Windows dev box cannot. app/text/nemo.py
+# degrades to the regex passes when it is absent.
+nemo = ["nemo-text-processing>=1.2.0"]
 
 [project.scripts]
 kokoro-vi-server = "app.cli:main"

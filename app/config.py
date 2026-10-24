@@ -105,6 +105,19 @@ class Settings:
     max_queue: int = 256
     #: Maximum seconds a request can wait in the queue before timing out with 503.
     queue_timeout: float = 60.0
+    #: Maximum seconds one synthesis may run before it is abandoned with 503.
+    #: Without this a single long input holds the only GPU slot indefinitely,
+    #: because ``max_text_chars`` bounds the input but not the decode time.
+    #: 0 disables the limit.
+    synthesis_timeout: float = 300.0
+
+    # --- cache ---------------------------------------------------------------
+    #: Cache synthesized audio keyed by (text, voice, speed, format). Repeated
+    #: text is common in production (prompts, IVR lines), and a hit skips the
+    #: decode entirely. 0 disables the cache.
+    cache_max_entries: int = 256
+    #: Maximum bytes the audio cache may hold. 0 disables the cache.
+    cache_max_bytes: int = 256 * 1024 * 1024
 
     # --- http ----------------------------------------------------------------
     host: str = "0.0.0.0"
@@ -112,6 +125,8 @@ class Settings:
     api_key: str | None = None
     cors_origins: tuple[str, ...] = ("*",)
     log_level: str = "info"
+    #: Emit one JSON object per log line so Loki/ELK can parse it.
+    log_json: bool = False
 
     @property
     def profile(self) -> str:
@@ -153,11 +168,15 @@ class Settings:
             max_concurrency=_maybe_int("MAX_CONCURRENCY", 1) or 1,
             max_queue=_maybe_int("MAX_QUEUE", 256) or 0,
             queue_timeout=_maybe_float("QUEUE_TIMEOUT", 60.0) or 60.0,
+            synthesis_timeout=_maybe_float("SYNTHESIS_TIMEOUT", 300.0) or 0.0,
+            cache_max_entries=_maybe_int("CACHE_MAX_ENTRIES", 256) or 0,
+            cache_max_bytes=_maybe_int("CACHE_MAX_BYTES", 256 * 1024 * 1024) or 0,
             host=_get("HOST", "0.0.0.0"),
             port=_maybe_int("PORT", 8880) or 8880,
             api_key=_get("API_KEY"),
             cors_origins=tuple(o.strip() for o in origins.split(",") if o.strip()),
             log_level=(_get("LOG_LEVEL", "info") or "info").lower(),
+            log_json=_flag("LOG_JSON", False),
         )
 
     def merge(self, **overrides: Any) -> Settings:

@@ -7,9 +7,11 @@ package (Kokoro-82M / StyleTTS 2) and is deployed as a GPUStack custom backend.
 
 | Path | Role |
 |---|---|
-| `app/engine.py` | Model load, voice runtimes, text normalization, phoneme fitting, scheduler, metrics |
+| `app/engine.py` | Model load, voice runtimes, phoneme fitting, scheduler, timeout, metrics |
+| `app/text/` | Vietnamese normalization: numbers, dates, units, letters, optional NeMo |
+| `app/cache.py` | Bounded LRU audio cache |
 | `app/audio.py` | float32 → mp3/wav/flac/opus/aac/pcm, crossfade, concat |
-| `app/server.py` | FastAPI app, `/v1/audio/speech`, streaming, probes |
+| `app/server.py` | FastAPI app, `/v1/audio/speech`, streaming, probes, request id |
 | `app/schemas.py` | Pydantic request models + the `APIError` envelope |
 | `app/voices.py` | 14 voicepacks, OpenAI aliases, `resolve()` |
 | `app/config.py` | Env-driven frozen `Settings` dataclass |
@@ -40,6 +42,8 @@ ruff format app tests                       # format
   network in memory.
 - **Text normalization is Vietnamese-specific and order-sensitive.** Read
   `.agents/rules/text-normalization.md` before touching it.
+- **No abbreviation dictionary.** Vietnamese abbreviations are an open set;
+  only closed sets (the alphabet, the number grammar) are handled, and by rule.
 - Line length 88; ruff `E,F,W,I,UP,B,C4,SIM,RUF`. Public functions get type
   hints and every module starts with `from __future__ import annotations`.
 
@@ -48,5 +52,5 @@ ruff format app tests                       # format
 - Changing synthesis behaviour → `.agents/rules/engine-and-audio.md`
 - Changing request/response shape → `.agents/rules/api-contract.md`
 - Adding or fixing tests → `.agents/rules/testing.md`
-- Text, numbers, dates, abbreviations → `.agents/rules/text-normalization.md`
+- Text, numbers, dates, units → `.agents/rules/text-normalization.md`
 - Images, CI, GPUStack → `.agents/rules/deploy.md`

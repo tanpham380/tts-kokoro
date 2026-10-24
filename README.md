@@ -308,11 +308,34 @@ const buffer = Buffer.from(await response.arrayBuffer());
 | `MAX_CONCURRENCY` | `1` | Max parallel decodes |
 | `MAX_QUEUE` | `256` | Max queue size (return 503 when full) |
 | `QUEUE_TIMEOUT` | `60` | Max queue wait time (seconds) |
+| `SYNTHESIS_TIMEOUT` | `300` | Max seconds one synthesis may run (0 disables) |
+| `CACHE_MAX_ENTRIES` | `256` | Audio cache entry cap (0 disables) |
+| `CACHE_MAX_BYTES` | `268435456` | Audio cache byte cap (0 disables) |
 | `CROSSFADE_MS` | `50` | Crossfade duration between sentences (ms) |
 | `SPEED` | `1.0` | Default synthesis speed |
 | `PORT` | `8880` | HTTP listen port |
 | `API_KEY` | `None` | Bearer token for API authentication |
 | `LOG_LEVEL` | `info` | Logging verbosity |
+| `LOG_JSON` | `false` | Emit one JSON object per log line |
+
+### Observability
+
+| Endpoint | Format | Use |
+|---|---|---|
+| `GET /metrics` | JSON | Humans, Web Studio |
+| `GET /metrics/prometheus` | Prometheus text | Scrape this |
+
+Every response carries `X-Request-ID`; send your own to have it echoed back.
+`POST /v1/audio/speech` also returns `X-Cache: HIT` or `MISS`.
+
+### Text normalization
+
+`app/text/` normalizes Vietnamese before phonemization. The regex passes handle
+numbers, dates, times, currency, units, percentages and standalone letters.
+When `nemo-text-processing` is installed (the Docker images install it), NeMo's
+Vietnamese TN grammar runs as a second stage for fractions, roman numerals,
+ordinals and measure. It is optional: `pynini` has no Windows wheel, so a local
+Windows checkout falls back to the regex passes automatically.
 
 ---
 

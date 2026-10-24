@@ -32,14 +32,18 @@ from typing import Any
 import numpy as np
 
 from .audio import concat, crossfade
+from .cache import AudioCache, CacheKey
 from .config import DEFAULT_SAMPLE_RATE, Settings
 from .schemas import APIError
+from .text import (
+    convert_numbers,
+    digits_to_words,
+    int_to_words,
+    normalize,
+)
 from .voices import VOICES, VoiceError, resolve
 
 logger = logging.getLogger("tts_kokoro.engine")
-
-import re
-import unicodedata
 
 #: Longest phoneme sequence the decoder accepts. Upstream raises above this, so
 #: a sentence longer than the limit is split further rather than rejected.
@@ -48,208 +52,12 @@ MAX_PHONEMES = 510
 #: Boundaries a too-long chunk is cut at, longest pause first.
 _CLAUSE_BREAKS = (";", ",", ":", "—", "-", " ")
 
-#: Fix for Issue #4 on iamdinhthuan/Kokoro-Vietnamese:
-#: Single isolated letters mispronounced by English fallback (e.g. "Y" -> "quai").
-STANDALONE_LETTER_FIXES: dict[str, str] = {
-    r"\bY\b": "i",
-    r"\by\b": "i",
-    r"\bA\b": "a",
-    r"\bE\b": "e",
-    r"\bI\b": "i",
-    r"\bO\b": "o",
-    r"\bU\b": "u",
-    r"\bB\b": "bê",
-    r"\bC\b": "xê",
-    r"\bD\b": "dê",
-    r"\bF\b": "ép",
-    r"\bG\b": "gờ",
-    r"\bH\b": "hát",
-    r"\bJ\b": "giây",
-    r"\bK\b": "ca",
-    r"\bL\b": "e-lờ",
-    r"\bM\b": "em",
-    r"\bN\b": "en",
-    r"\bP\b": "pê",
-    r"\bQ\b": "quy",
-    r"\bR\b": "e-rờ",
-    r"\bS\b": "ét",
-    r"\bT\b": "tê",
-    r"\bV\b": "vê",
-    r"\bW\b": "vê-kép",
-    r"\bX\b": "ích",
-    r"\bZ\b": "dét",
-}
-
-#: Common Vietnamese acronyms and abbreviations for natural speech synthesis.
-VI_ABBREVIATIONS: dict[str, str] = {
-    r"\bTP\.?\s*HCM\b": "Thành phố Hồ Chí Minh",
-    r"\bTP\.?\s*HN\b": "Thành phố Hà Nội",
-    r"\bTP\b": "Thành phố",
-    r"\bVN\b": "Việt Nam",
-    r"\bVND\b": "đồng",
-    r"\bUSD\b": "đô la",
-    r"\bBS\.\b": "Bác sĩ",
-    r"\bThS\.\b": "Thạc sĩ",
-    r"\bTS\.\b": "Tiến sĩ",
-    r"\bPGS\.\b": "Phó giáo sư",
-    r"\bGS\.\b": "Giáo sư",
-    r"(?<=\d|\s)km/h\b": " ki lô mét một giờ",
-    r"(?<=\d|\s)km\b": " ki lô mét",
-    r"(?<=\d|\s)kg\b": " ki lô gam",
-    r"(?<=\d|\s)cm\b": " xen ti mét",
-    r"(?<=\d|\s)mm\b": " mi li mét",
-    r"(?<=\d|\s)m2\b": " mét vuông",
-    r"(?<=\d|\s)m3\b": " mét khối",
-    r"(?<=\d)k\b": " nghìn",
-    r"%": " phần trăm",
-    r"&": " và ",
-}
-
-
-UNITS: list[str] = [
-    "không", "một", "hai", "ba", "bốn", "năm", "sáu", "bảy", "tám", "chín"
-]
-
-
-def int_to_vietnamese_words(n: int) -> str:
-    """Convert an integer 0..999,999,999,999 to natural Vietnamese words."""
-    if n < 0:
-        return "âm " + int_to_vietnamese_words(-n)
-    if n < 10:
-        return UNITS[n]
-    if n < 20:
-        if n == 10:
-            return "mười"
-        if n == 15:
-            return "mười lăm"
-        return "mười " + UNITS[n % 10]
-    if n < 100:
-        ten, unit = n // 10, n % 10
-        ten_str = UNITS[ten] + " mươi"
-        if unit == 0:
-            return ten_str
-        if unit == 1:
-            return ten_str + " mốt"
-        if unit == 4:
-            return ten_str + " tư"
-        if unit == 5:
-            return ten_str + " lăm"
-        return ten_str + " " + UNITS[unit]
-    if n < 1000:
-        h, rem = n // 100, n % 100
-        h_str = UNITS[h] + " trăm"
-        if rem == 0:
-            return h_str
-        if rem < 10:
-            return h_str + " lẻ " + UNITS[rem]
-        return h_str + " " + int_to_vietnamese_words(rem)
-    if n < 1_000_000:
-        k, rem = n // 1000, n % 1000
-        k_str = int_to_vietnamese_words(k) + " nghìn"
-        if rem == 0:
-            return k_str
-        if rem < 100:
-            if rem < 10:
-                return k_str + " không trăm lẻ " + UNITS[rem]
-            return k_str + " không trăm " + int_to_vietnamese_words(rem)
-        return k_str + " " + int_to_vietnamese_words(rem)
-    if n < 1_000_000_000:
-        m, rem = n // 1_000_000, n % 1_000_000
-        m_str = int_to_vietnamese_words(m) + " triệu"
-        if rem == 0:
-            return m_str
-        return m_str + " " + int_to_vietnamese_words(rem)
-    b, rem = n // 1_000_000_000, n % 1_000_000_000
-    b_str = int_to_vietnamese_words(b) + " tỷ"
-    if rem == 0:
-        return b_str
-    return b_str + " " + int_to_vietnamese_words(rem)
-
-
-def digits_to_vietnamese_words(s: str) -> str:
-    """Convert a sequence of digits to individual words (e.g. '01' -> 'không một')."""
-    return " ".join(UNITS[int(c)] for c in s if c.isdigit())
-
-
-def convert_numbers_to_vietnamese_words(text: str) -> str:
-    """Normalize numeric expressions (dates, decimals, leading zero numbers, integers) into words."""
-    if not text:
-        return ""
-
-    # 1. Date formats: dd/mm/yyyy or dd-mm-yyyy (e.g. 01/05/2001)
-    def _date_sub(m: re.Match) -> str:
-        try:
-            d = int(m.group(1))
-            mo = int(m.group(2))
-            y = int(m.group(3))
-            d_word = ("mùng " + UNITS[d]) if (1 <= d <= 9) else int_to_vietnamese_words(d)
-            return f"ngày {d_word} tháng {int_to_vietnamese_words(mo)} năm {int_to_vietnamese_words(y)}"
-        except Exception:
-            return m.group(0)
-
-    # Consume an immediately preceding "ngày " so "ngày 20/10/2026" does not
-    # become "ngày ngày 20 tháng 10 ..."; the replacement re-adds it once.
-    text = re.sub(
-        r"(?:\bngày\s+)?\b([0-3]?\d)[/-]([01]?\d)[/-](\d{4})\b",
-        _date_sub,
-        text,
-        flags=re.IGNORECASE,
-    )
-
-    # 2. Decimals: 3.14 or 3,14
-    def _dec_sub(m: re.Match) -> str:
-        try:
-            w1 = int_to_vietnamese_words(int(m.group(1)))
-            dec_str = m.group(2)
-            # In natural Vietnamese, 1-2 decimal places without leading zeros are read as numbers:
-            # 3.14 -> "ba phẩy mười bốn", 6.5 -> "sáu phẩy năm", 0.25 -> "không phẩy hai mươi lăm"
-            # If starting with 0 (e.g. 0.05) or >= 3 digits (e.g. 3.14159), read digit-by-digit.
-            if len(dec_str) <= 2 and not dec_str.startswith("0"):
-                w2 = int_to_vietnamese_words(int(dec_str))
-            else:
-                w2 = digits_to_vietnamese_words(dec_str)
-            return f"{w1} phẩy {w2}"
-        except Exception:
-            return m.group(0)
-
-    text = re.sub(r"\b(\d+)[.,](\d+)\b", _dec_sub, text)
-
-    # 3. Individual numbers / padded digits (e.g. '01', '05', '2001')
-    def _num_sub(m: re.Match) -> str:
-        s = m.group(0)
-        if len(s) > 1 and s.startswith("0"):
-            return digits_to_vietnamese_words(s)
-        try:
-            return int_to_vietnamese_words(int(s))
-        except Exception:
-            return digits_to_vietnamese_words(s)
-
-    text = re.sub(r"\b\d+\b", _num_sub, text)
-    return text
-
-
-def normalize_vietnamese_text(text: str) -> str:
-    """Preprocess Vietnamese text: normalize abbreviations, numbers and fix standalone letters (Issue #4)."""
-    if not text:
-        return ""
-    # 1. Unicode NFC
-    text = unicodedata.normalize("NFC", text)
-
-    # 2. Abbreviations & Units (do this before number expansion so 15km -> 15 ki lô mét)
-    for pattern, rep in VI_ABBREVIATIONS.items():
-        text = re.sub(pattern, rep, text, flags=re.IGNORECASE)
-
-    # 3. Numbers & Dates expansion (e.g. '01 05 2001' -> 'không một không năm hai nghìn không trăm lẻ một')
-    text = convert_numbers_to_vietnamese_words(text)
-
-    # 4. Standalone letter fixes (Issue #4: Y -> i, avoiding 'quai' pronunciation)
-    for pattern, rep in STANDALONE_LETTER_FIXES.items():
-        text = re.sub(pattern, rep, text)
-
-    # 5. Clean extra spaces
-    text = re.sub(r"[ \t]+", " ", text).strip()
-    return text
-
+#: Backwards-compatible aliases. The implementation moved to :mod:`app.text`;
+#: these names are kept because tests and downstream callers import them.
+int_to_vietnamese_words = int_to_words
+digits_to_vietnamese_words = digits_to_words
+convert_numbers_to_vietnamese_words = convert_numbers
+normalize_vietnamese_text = normalize
 
 class EngineError(RuntimeError):
     """Raised when the model or a voicepack cannot be prepared."""
@@ -282,11 +90,8 @@ class VoiceRuntime:
         """Yield one array per sentence, in order."""
         from kokoro_vietnamese import phonemize, split_text
 
-        # Only apply Vietnamese acronyms & standalone letter fix if language is vi or auto
-        if language in ("vi", "auto"):
-            clean_text = normalize_vietnamese_text(text)
-        else:
-            clean_text = unicodedata.normalize("NFC", text).strip()
+        # ``normalize`` already handles the non-Vietnamese case (NFC + whitespace).
+        clean_text = normalize(text, language)
 
         for text_chunk in split_text(clean_text):
             for piece in _fit_phonemes(text_chunk):
@@ -372,12 +177,17 @@ class TTSEngine:
         self._loaded_at: float | None = None
         self._load_seconds: float | None = None
         self._load_error: str | None = None
+        self._draining = False
 
         # A semaphore rather than an executor. Synthesis is a single blocking
         # call and the HTTP server already runs it in a worker thread, so all
         # that is missing is a limit on how many run at once.
         self._slots = threading.BoundedSemaphore(max(1, settings.max_concurrency))
         self._counters = _Counters()
+        self._cache = AudioCache(
+            max_entries=settings.cache_max_entries,
+            max_bytes=settings.cache_max_bytes,
+        )
 
     # -- state ---------------------------------------------------------------
 
@@ -400,6 +210,15 @@ class TTSEngine:
     @property
     def load_error(self) -> str | None:
         return self._load_error
+
+    @property
+    def is_draining(self) -> bool:
+        """True once shutdown has started; new requests should be refused."""
+        return self._draining
+
+    def begin_shutdown(self) -> None:
+        """Stop accepting new work. In-flight requests are left to finish."""
+        self._draining = True
 
     # -- loading -------------------------------------------------------------
 
@@ -606,6 +425,12 @@ class TTSEngine:
             logger.debug("warmup failed", exc_info=True)
 
     def _require_loaded(self) -> None:
+        if self._draining:
+            raise APIError(
+                "the server is shutting down and is not accepting new requests",
+                status_code=503,
+                code="server_shutting_down",
+            )
         if self.is_loaded:
             return
         if self._load_error:
@@ -708,10 +533,21 @@ class TTSEngine:
         started = time.perf_counter()
         produced = 0
         failed = True
+        # A deadline rather than a per-chunk timeout: the limit is on the whole
+        # request, and checking between chunks is enough because one chunk is
+        # one sentence.
+        timeout = self.settings.synthesis_timeout
+        deadline = started + timeout if timeout and timeout > 0 else None
         try:
             held: np.ndarray | None = None
             lang = language or "vi"
             for chunk in runtime.sentences(text, pace, language=lang):
+                if deadline is not None and time.perf_counter() > deadline:
+                    raise APIError(
+                        f"synthesis exceeded the {timeout:.0f}s limit",
+                        status_code=503,
+                        code="synthesis_timeout",
+                    )
                 if volume_multiplier != 1.0:
                     chunk = (chunk * float(volume_multiplier)).astype(np.float32)
                 if held is not None:
@@ -729,6 +565,17 @@ class TTSEngine:
             failed = False
         finally:
             self._release(produced, time.perf_counter() - started, failed=failed)
+
+    def cache_get(self, key: CacheKey) -> bytes | None:
+        """Return cached encoded audio, or ``None``."""
+        return self._cache.get(key)
+
+    def cache_put(self, key: CacheKey, value: bytes) -> None:
+        """Store encoded audio for reuse."""
+        self._cache.put(key, value)
+
+    def cache_clear(self) -> None:
+        self._cache.clear()
 
     def _acquire(self) -> None:
         limit = self.settings.max_queue
@@ -817,13 +664,134 @@ class TTSEngine:
         # Synthesis speed relative to playback: below 1.0 is faster than real
         # time, above 1.0 means a client would underrun.
         rtf = (synth / audio) if audio else None
+        cache = self._cache.stats()
         return {
             **snapshot,
             "audio_seconds_total": round(audio, 3),
             "synth_seconds_total": round(synth, 3),
             "realtime_factor": round(rtf, 4) if rtf is not None else None,
             "rtf": round(rtf, 4) if rtf is not None else None,
+            "cache_enabled": self._cache.enabled,
+            "cache_hits": cache.hits,
+            "cache_misses": cache.misses,
+            "cache_evictions": cache.evictions,
+            "cache_entries": cache.entries,
+            "cache_bytes": cache.bytes,
             "loaded": self.is_loaded,
             "loading": self.is_loading,
             "device": self._device,
         }
+
+    def prometheus(self) -> str:
+        """Render the counters in Prometheus text exposition format.
+
+        ``/metrics`` returns JSON for humans and the Web Studio; this is the
+        scrapeable form. Only counters and gauges are exposed — a latency
+        histogram would need per-request buckets, which the engine does not
+        keep.
+        """
+        counters = self._counters
+        with counters.lock:
+            audio, synth = counters.audio_seconds, counters.synth_seconds
+            snapshot = {
+                "requests_total": counters.requests,
+                "requests_success": counters.succeeded,
+                "requests_failed": counters.failed,
+                "queued": counters.queued,
+                "max_queued": counters.max_queued,
+            }
+        cache = self._cache.stats()
+        rtf = (synth / audio) if audio else 0.0
+
+        lines: list[str] = []
+
+        def _metric(name: str, kind: str, help_text: str, value: float) -> None:
+            lines.append(f"# HELP {name} {help_text}")
+            lines.append(f"# TYPE {name} {kind}")
+            lines.append(f"{name} {value}")
+
+        _metric(
+            "kokoro_requests_total",
+            "counter",
+            "Synthesis requests accepted.",
+            snapshot["requests_total"],
+        )
+        _metric(
+            "kokoro_requests_success_total",
+            "counter",
+            "Synthesis requests that completed.",
+            snapshot["requests_success"],
+        )
+        _metric(
+            "kokoro_requests_failed_total",
+            "counter",
+            "Synthesis requests that raised.",
+            snapshot["requests_failed"],
+        )
+        _metric(
+            "kokoro_queue_depth",
+            "gauge",
+            "Requests currently waiting for a synthesis slot.",
+            snapshot["queued"],
+        )
+        _metric(
+            "kokoro_queue_max_depth",
+            "gauge",
+            "High-water mark of the queue depth.",
+            snapshot["max_queued"],
+        )
+        _metric(
+            "kokoro_audio_seconds_total",
+            "counter",
+            "Audio produced, in seconds.",
+            round(audio, 3),
+        )
+        _metric(
+            "kokoro_synth_seconds_total",
+            "counter",
+            "Time spent decoding, in seconds.",
+            round(synth, 3),
+        )
+        _metric(
+            "kokoro_realtime_factor",
+            "gauge",
+            "Decode seconds per audio second; below 1.0 is faster than real time.",
+            round(rtf, 4),
+        )
+        _metric(
+            "kokoro_model_loaded",
+            "gauge",
+            "1 when the model is in memory.",
+            1 if self.is_loaded else 0,
+        )
+        _metric(
+            "kokoro_voices_loaded",
+            "gauge",
+            "Voicepacks currently resident.",
+            len(self._voices),
+        )
+        _metric(
+            "kokoro_cache_hits_total",
+            "counter",
+            "Audio cache hits.",
+            cache.hits,
+        )
+        _metric(
+            "kokoro_cache_misses_total",
+            "counter",
+            "Audio cache misses.",
+            cache.misses,
+        )
+        _metric(
+            "kokoro_cache_entries",
+            "gauge",
+            "Entries currently in the audio cache.",
+            cache.entries,
+        )
+        _metric(
+            "kokoro_cache_bytes",
+            "gauge",
+            "Bytes currently held by the audio cache.",
+            cache.bytes,
+        )
+        return "\n".join(lines) + "\n"

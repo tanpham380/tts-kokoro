@@ -35,7 +35,7 @@ WORKDIR /build
 COPY pyproject.toml README.md* ./
 COPY app ./app
 
-RUN uv pip install . && rm -rf /root/.cache/uv
+RUN uv pip install ".[nemo]" && rm -rf /root/.cache/uv
 
 # --------------------------------------------------------------------------- #
 # Stage 2: Runtime
