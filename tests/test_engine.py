@@ -6,22 +6,12 @@ bare laptop."""
 
 from __future__ import annotations
 
-import threading
-
 import numpy as np
-
 import pytest
 
-
-
 from app.config import Settings
-
-from app.engine import TTSEngine, VoiceRuntime, _fit_phonemes
-
+from app.engine import TTSEngine, VoiceRuntime
 from app.schemas import APIError
-
-
-
 
 
 class FakeVoicepack:

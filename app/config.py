@@ -7,10 +7,9 @@ Command line flags, when present, win over the environment.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, fields, replace
 from typing import Any
-
-import os
 
 DEFAULT_REPO_ID = "contextboxai/Kokoro-Vietnamese"
 DEFAULT_SERVED_NAME = "Kokoro-Vietnamese"

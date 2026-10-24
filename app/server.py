@@ -33,10 +33,8 @@ import time
 import uuid
 from collections.abc import AsyncIterator, Callable, Generator
 from contextlib import asynccontextmanager
-from pathlib import Path
 from typing import Any
 
-import numpy as np
 from fastapi import Depends, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
@@ -47,17 +45,27 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from . import __version__
 from .audio import (
     base64_chunk,
-    encode as encode_audio,
     encode_stream_chunk,
     stream_prefix,
     streaming_mime,
 )
+from .audio import (
+    encode as encode_audio,
+)
 from .cache import CacheKey
-from .config import DEFAULT_RESPONSE_FORMAT, Settings
+from .config import Settings
 from .engine import TTSEngine
-from .schemas import APIError, HealthResponse, ModelCard, ModelList, SpeechRequest, VoiceList, VoiceCard
+from .schemas import (
+    APIError,
+    HealthResponse,
+    ModelCard,
+    ModelList,
+    SpeechRequest,
+    VoiceCard,
+    VoiceList,
+)
 from .ui import INDEX_HTML
-from .voices import OPENAI_VOICE_ALIASES, VOICES, catalogue, resolve
+from .voices import VOICES, catalogue, resolve
 
 # --------------------------------------------------------------------------- #
 # logging

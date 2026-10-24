@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+
 @dataclass(frozen=True)
 class Voice:
     """One voicepack, described well enough to advertise over HTTP."""

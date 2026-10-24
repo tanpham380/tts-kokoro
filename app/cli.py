@@ -9,7 +9,6 @@ environment variable; a flag passed on the command line wins over both.
 from __future__ import annotations
 
 import argparse
-import os
 from collections.abc import Sequence
 
 from . import __version__
@@ -108,7 +107,8 @@ def main(argv: Sequence[str] | None = None) -> None:
     args = parse_args(argv)
 
     from .config import Settings
-    from .server import app, settings as module_settings
+    from .server import app
+    from .server import settings as module_settings
 
     overrides = collect_overrides(args)
 

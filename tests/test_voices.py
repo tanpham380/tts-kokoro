@@ -6,10 +6,14 @@ from __future__ import annotations
 
 import pytest
 
-from app.voices import OPENAI_VOICE_ALIASES, VOICE_IDS, VOICES, VoiceError, catalogue, resolve
-
-
-
+from app.voices import (
+    OPENAI_VOICE_ALIASES,
+    VOICE_IDS,
+    VOICES,
+    VoiceError,
+    catalogue,
+    resolve,
+)
 
 
 def test_voice_count():

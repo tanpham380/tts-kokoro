@@ -5,7 +5,6 @@ from __future__ import annotations
 import pytest
 from starlette.testclient import TestClient
 
-from app.config import Settings
 from app.server import app, engine
 
 
