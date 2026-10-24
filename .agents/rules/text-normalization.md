@@ -11,11 +11,12 @@ It lives in `app/text/` and runs inside `VoiceRuntime.sentences()`.
 ```
 app/text/
 ├── __init__.py     normalize(text, language) — the ordered pipeline
+├── data.py         lru_cached TSV loader + named accessors
+├── data/           word tables copied from NeMo-text-processing (Apache-2.0)
 ├── numbers.py      cardinal, ordinal, decimal, read_number_token
 ├── dates.py        dates, times, weekdays, ranges
 ├── units.py        currency, measurement, percentage
-├── letters.py      standalone letters + acronym-with-number
-└── nemo.py         optional NeMo TN stage (Linux only)
+└── letters.py      standalone letters + acronym-with-number
 ```
 
 ## Pipeline order is load-bearing
@@ -31,7 +32,6 @@ breaks cases that currently pass:
 5. `convert_numbers` — grouped thousands, decimals, bare integers
 6. `fix_standalone_letters` — **after** numbers, so `B` in `nhóm máu A và B`
    is still a letter
-7. `nemo.normalize` — optional second stage
 
 ## There is no abbreviation dictionary
 
@@ -45,8 +45,8 @@ extend. Only closed sets are handled, and they are handled by rule:
 | Number/date/unit grammar | `numbers.py`, `dates.py`, `units.py` | Finite patterns |
 | Acronym + digits | `letters.py::split_acronym_numbers` | Structural, not a lookup |
 
-`TP.HCM` is therefore **not** expanded by this package. It is left for NeMo TN
-or the caller. If you need it, add it at the call site — do not reintroduce a
+`TP.HCM` is therefore **not** expanded by this package. It is left to the
+caller. If you need it, add it at the call site — do not reintroduce a
 dictionary here.
 
 ## The dot-is-thousands rule
@@ -64,16 +64,34 @@ wrong. Vietnamese uses `.` for thousands and `,` for decimals:
 caller that pulls a number out of a larger pattern (`50.000đ`, `VND 1.500.000`)
 must go through it.
 
-## NeMo TN is optional
+## Word tables are data, not code
 
-`nemo.py` wraps `nemo-text-processing`'s Vietnamese TN grammar. It is optional
-because `pynini` ships **manylinux-only** wheels:
+`data/` holds 25 TSV files copied verbatim from
+[NeMo-text-processing](https://github.com/NVIDIA/NeMo-text-processing)'s
+Vietnamese grammar (Apache-2.0 — see `data/NOTICE`). **Only the data was
+copied, not the Python.**
 
-- Docker images (glibc 2.35/2.36) install it via the `nemo` extra.
-- A Windows dev box cannot, so `nemo.normalize()` is a no-op there.
+Why not depend on `nemo-text-processing`:
 
-Never make the regex passes depend on NeMo. The suite must pass with and
-without it — `tests/test_text.py::test_nemo_stage_is_optional` enforces that.
+| | NeMo dependency | Vendored tables |
+|---|---|---|
+| Install size | `pynini` wheel is **147.6 MB** | **4.1 KB** of TSV |
+| Windows | No wheel; source build fails (`cl : D8021 invalid numeric argument '/Wno-register'`) | Pure stdlib |
+| Code needed | 1368 lines, of which 291 are pynini/FST | `data.py` is ~200 lines |
+
+NeMo uses finite-state transducers because it must emit *every* valid reading
+of an ambiguous input. A TTS frontend needs exactly **one** reading, so the FST
+machinery buys nothing here. The remaining 1077 lines of NeMo's grammar just
+read these same TSVs into dicts — which is what `data.py` does.
+
+Two deliberate divergences from upstream, both documented in code:
+
+- `numbers/magnitudes.tsv` says `linh` (southern); the project pins `lẻ`
+  (northern) via `_FILLER` in `numbers.py`. The TSV stays byte-identical.
+- `km` is not in `measure/base_units.tsv` (it is `k` + `m`), so `_KM` is
+  spelled out in `units.py`.
+
+To add a unit, month, or currency: **edit the TSV**, do not add a branch.
 
 ## Rules for changes
 
@@ -84,3 +102,6 @@ without it — `tests/test_text.py::test_nemo_stage_is_optional` enforces that.
 - **Do not lowercase the whole string.** `Xin chào` must stay `Xin chào`.
 - **Keep the functions pure.** No I/O, no logging, no settings lookups — this
   runs per sentence inside the synthesis hot path.
+- **Keep the TSVs byte-identical to upstream.** A local edit makes the next
+  upstream sync a manual merge. Put project choices in code, as `_FILLER` and
+  `_KM` do.

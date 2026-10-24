@@ -330,12 +330,20 @@ Every response carries `X-Request-ID`; send your own to have it echoed back.
 
 ### Text normalization
 
-`app/text/` normalizes Vietnamese before phonemization. The regex passes handle
+`app/text/` normalizes Vietnamese before phonemization. The passes handle
 numbers, dates, times, currency, units, percentages and standalone letters.
-When `nemo-text-processing` is installed (the Docker images install it), NeMo's
-Vietnamese TN grammar runs as a second stage for fractions, roman numerals,
-ordinals and measure. It is optional: `pynini` has no Windows wheel, so a local
-Windows checkout falls back to the regex passes automatically.
+
+The word tables in `app/text/data/` are copied verbatim from
+[NeMo-text-processing](https://github.com/NVIDIA/NeMo-text-processing)'s
+Vietnamese grammar (Apache-2.0 — see `app/text/data/NOTICE`). Only the **data**
+was copied, not the Python: NeMo's grammar needs `pynini`, a 147.6 MB
+manylinux-only wheel with no Windows build, while the tables are 4.1 KB of TSV
+read by ~200 lines of standard-library code in `app/text/data.py`.
+
+There is deliberately **no abbreviation dictionary** — Vietnamese abbreviations
+are an open set, so only closed sets (the Latin alphabet, the number/date/unit
+grammar) are handled, and by rule. See
+[`.agents/rules/text-normalization.md`](.agents/rules/text-normalization.md).
 
 ---
 

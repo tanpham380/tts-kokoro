@@ -8,7 +8,7 @@ package (Kokoro-82M / StyleTTS 2) and is deployed as a GPUStack custom backend.
 | Path | Role |
 |---|---|
 | `app/engine.py` | Model load, voice runtimes, phoneme fitting, scheduler, timeout, metrics |
-| `app/text/` | Vietnamese normalization: numbers, dates, units, letters, optional NeMo |
+| `app/text/` | Vietnamese normalization: numbers, dates, units, letters, vendored word tables |
 | `app/cache.py` | Bounded LRU audio cache |
 | `app/audio.py` | float32 → mp3/wav/flac/opus/aac/pcm, crossfade, concat |
 | `app/server.py` | FastAPI app, `/v1/audio/speech`, streaming, probes, request id |
@@ -44,6 +44,9 @@ ruff format app tests                       # format
   `.agents/rules/text-normalization.md` before touching it.
 - **No abbreviation dictionary.** Vietnamese abbreviations are an open set;
   only closed sets (the alphabet, the number grammar) are handled, and by rule.
+- **Word tables are data, not code.** `app/text/data/*.tsv` is copied verbatim
+  from NeMo-text-processing (Apache-2.0). Add a unit or month by editing the
+  TSV; put project-specific choices in code, as `_FILLER` and `_KM` do.
 - Line length 88; ruff `E,F,W,I,UP,B,C4,SIM,RUF`. Public functions get type
   hints and every module starts with `from __future__ import annotations`.
 
