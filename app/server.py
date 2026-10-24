@@ -151,7 +151,11 @@ async def _request_id(request: Request, call_next: Callable[[Request], Any]) -> 
 
 @app.exception_handler(APIError)
 async def _api_error_handler(_: Request, exc: APIError) -> JSONResponse:
-    return JSONResponse(status_code=exc.status_code, content=exc.payload())
+    return JSONResponse(
+        status_code=exc.status_code,
+        content=exc.payload(),
+        headers=exc.headers(),
+    )
 
 
 @app.exception_handler(StarletteHTTPException)
@@ -371,6 +375,7 @@ async def create_speech(
             "the model is still loading, please retry in a moment",
             status_code=503,
             code="model_loading",
+            retry_after=2.0,
         )
 
     try:

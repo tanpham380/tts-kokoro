@@ -42,16 +42,31 @@ class APIError(Exception):
         status_code: int = 400,
         code: str | None = None,
         param: str | None = None,
+        retry_after: float | None = None,
     ) -> None:
         super().__init__(message)
         self.message = message
         self.status_code = status_code
         self.code = code
         self.param = param
+        #: Seconds a client should wait before retrying. Only meaningful on a
+        #: 503; rendered as the ``Retry-After`` header.
+        self.retry_after = retry_after
 
     @property
     def error_type(self) -> str:
         return _ERROR_TYPES.get(self.status_code, "invalid_request_error")
+
+    def headers(self) -> dict[str, str]:
+        """Response headers this error implies.
+
+        ``Retry-After`` is only sent on a 503, and only when a wait was
+        estimated — a bare ``Retry-After: 0`` would invite an immediate retry
+        storm, which is the opposite of what backpressure is for.
+        """
+        if self.status_code == 503 and self.retry_after is not None:
+            return {"Retry-After": str(max(1, round(self.retry_after)))}
+        return {}
 
     def payload(self) -> dict[str, Any]:
         return {

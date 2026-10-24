@@ -225,6 +225,79 @@ def test_prometheus_exposition_is_well_formed() -> None:
     assert "# TYPE kokoro_queue_depth gauge" in text
 
 # --------------------------------------------------------------------------- #
+# Retry-After
+# --------------------------------------------------------------------------- #
+
+def test_retry_after_only_on_503() -> None:
+    """A 400 must not carry Retry-After; only backpressure does."""
+    assert APIError("bad", status_code=400, retry_after=5).headers() == {}
+    assert APIError("busy", status_code=503, retry_after=5).headers() == {
+        "Retry-After": "5"
+    }
+
+def test_retry_after_omitted_when_not_estimated() -> None:
+    assert APIError("busy", status_code=503).headers() == {}
+
+def test_retry_after_is_never_zero() -> None:
+    """``Retry-After: 0`` invites an immediate retry storm."""
+    assert APIError("busy", status_code=503, retry_after=0).headers() == {
+        "Retry-After": "1"
+    }
+    assert APIError("busy", status_code=503, retry_after=0.4).headers() == {
+        "Retry-After": "1"
+    }
+
+def test_retry_hint_defaults_to_one_second() -> None:
+    engine = _engine(Settings())
+    assert engine._retry_hint() == 1.0
+
+def test_retry_hint_uses_average_decode_time() -> None:
+    engine = _engine(Settings())
+    engine._counters.requests = 4
+    engine._counters.synth_seconds = 40.0  # 10 s per request
+    assert engine._retry_hint() == 10.0
+
+def test_retry_hint_is_clamped() -> None:
+    engine = _engine(Settings())
+    engine._counters.requests = 1
+    engine._counters.synth_seconds = 10_000.0
+    assert engine._retry_hint() == 60.0
+
+def test_busy_503_carries_retry_after() -> None:
+    """The queue-full path must tell the client how long to wait."""
+    engine = _engine(Settings(max_concurrency=1, max_queue=0))
+    engine._slots.acquire()  # occupy the only slot
+    with pytest.raises(APIError) as exc:
+        engine._acquire()
+    assert exc.value.status_code == 503
+    assert exc.value.headers().get("Retry-After") == "1"
+
+def test_acquire_does_not_deadlock() -> None:
+    """``_retry_hint`` reads the counters under the same lock ``_acquire`` holds.
+
+    Regression guard: calling it inside the locked block hung the suite.
+    """
+    engine = _engine(Settings(max_concurrency=2, max_queue=4))
+    engine._acquire()
+    engine._release(0, 0.01, failed=False)
+    assert engine._counters.requests == 1
+
+def test_model_loading_503_carries_retry_after() -> None:
+    engine = TTSEngine(Settings())
+    with pytest.raises(APIError) as exc:
+        engine._require_loaded()
+    assert exc.value.code == "model_loading"
+    assert exc.value.headers().get("Retry-After") == "2"
+
+def test_draining_503_carries_retry_after() -> None:
+    engine = _engine(Settings())
+    engine.begin_shutdown()
+    with pytest.raises(APIError) as exc:
+        engine._require_loaded()
+    assert exc.value.code == "server_shutting_down"
+    assert exc.value.headers().get("Retry-After") == "5"
+
+# --------------------------------------------------------------------------- #
 # server: request id, prometheus route, cache header
 # --------------------------------------------------------------------------- #
 

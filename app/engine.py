@@ -430,6 +430,7 @@ class TTSEngine:
                 "the server is shutting down and is not accepting new requests",
                 status_code=503,
                 code="server_shutting_down",
+                retry_after=5.0,
             )
         if self.is_loaded:
             return
@@ -443,6 +444,7 @@ class TTSEngine:
             "the model is still loading; retry shortly",
             status_code=503,
             code="model_loading",
+            retry_after=2.0,
         )
 
     # -- synthesis -----------------------------------------------------------
@@ -547,6 +549,7 @@ class TTSEngine:
                         f"synthesis exceeded the {timeout:.0f}s limit",
                         status_code=503,
                         code="synthesis_timeout",
+                        retry_after=self._retry_hint(),
                     )
                 if volume_multiplier != 1.0:
                     chunk = (chunk * float(volume_multiplier)).astype(np.float32)
@@ -579,6 +582,9 @@ class TTSEngine:
 
     def _acquire(self) -> None:
         limit = self.settings.max_queue
+        # Computed before the lock is taken: ``_retry_hint`` reads the counters
+        # under the same lock, so calling it inside the block would deadlock.
+        hint = self._retry_hint()
         with self._counters.lock:
             if limit == 0:
                 if not self._slots.acquire(blocking=False):
@@ -586,6 +592,7 @@ class TTSEngine:
                         "the server is busy: maximum concurrency reached and queueing is disabled",
                         status_code=503,
                         code="server_busy",
+                        retry_after=hint,
                     )
                 return
             if limit and self._counters.queued >= limit:
@@ -594,6 +601,7 @@ class TTSEngine:
                     f"already waiting (queue limit {limit})",
                     status_code=503,
                     code="server_busy",
+                    retry_after=hint,
                 )
             self._counters.queued += 1
             self._counters.max_queued = max(
@@ -610,7 +618,27 @@ class TTSEngine:
                 f"the server is busy: request timed out waiting for a synthesis slot ({timeout}s)",
                 status_code=503,
                 code="server_busy",
+                retry_after=hint,
             )
+
+    def _retry_hint(self) -> float:
+        """Seconds a client should wait before retrying a 503.
+
+        Derived from the observed decode time per request: if a request that
+        produced 10 s of audio took 20 s, a waiting client should expect a
+        similar wait. Falls back to 1 s before any request has completed, and is
+        clamped so a pathological value cannot ask a client to sleep for hours.
+
+        Must not be called while ``_counters.lock`` is held.
+        """
+        counters = self._counters
+        with counters.lock:
+            synth = counters.synth_seconds
+            requests = counters.requests
+        if synth <= 0 or requests <= 0:
+            return 1.0
+        average = synth / requests
+        return float(min(60.0, max(1.0, average)))
 
     def _release(self, samples: int, seconds: float, *, failed: bool) -> None:
         self._slots.release()
